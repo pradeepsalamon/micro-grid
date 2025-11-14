@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Simple Solar Power Simulator</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#f6f9fc; --card:#fff; --muted:#6b7280;
+    --solar:#f59e0b; --controller:#06b6d4; --battery:#10b981; --load:#3b82f6; --warn:#ef4444;
+    font-family:Inter,system-ui,Segoe UI,Roboto,Arial;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:#0f172a;padding:18px}
+  .wrap{max-width:1000px;margin:0 auto}
+  header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+  h1{margin:0;font-size:20px}
+  p.lead{margin:0;color:var(--muted);font-size:13px}
+  .layout{display:grid;grid-template-columns:360px 1fr;gap:16px;margin-top:14px}
+  @media(max-width:920px){.layout{grid-template-columns:1fr}}
+  .card{background:var(--card);border-radius:12px;padding:14px;box-shadow:0 8px 24px rgba(2,6,23,0.06)}
+  label{display:block;font-size:13px;color:var(--muted);margin-top:10px}
+  .row{display:flex;gap:8px;align-items:center}
+  input[type=range]{flex:1}
+  input[type=number]{width:120px;padding:6px;border-radius:6px;border:1px solid #e6eef2}
+  .val{width:90px;text-align:right;font-weight:700}
+  .diagram{display:flex;gap:14px;align-items:center;justify-content:space-around;flex-wrap:wrap}
+  .node{width:170px;text-align:center;padding:10px;border-radius:10px;background:linear-gradient(180deg,#fff,#fbfdff);border:1px solid #eef2f7}
+  .sun{font-size:34px;display:inline-block;transition:filter .3s, transform .3s}
+  .glow{filter:drop-shadow(0 0 18px rgba(245,158,11,0.45));transform:scale(1.06)}
+  .controller{font-size:16px}
+  .batteryVisual{height:110px;width:70px;border-radius:8px;border:2px solid #e6eef2;position:relative;margin:6px auto;background:#fff}
+  .batteryLevel{position:absolute;left:0;bottom:0;width:100%;background:linear-gradient(180deg,#34d399,#10b981);transition:height .6s linear}
+  .batteryLabel{font-weight:700;margin-top:6px}
+  .flowBar{height:10px;border-radius:6px;background:#eef2f6;overflow:hidden;margin-top:8px}
+  .flowFill{height:100%;width:0%;transition:width .5s linear}
+  .flowFill.solar{background:linear-gradient(90deg,var(--solar),#f97316)}
+  .flowFill.batt{background:linear-gradient(90deg,var(--battery),#34d399)}
+  .flowFill.load{background:linear-gradient(90deg,var(--load),#60a5fa)}
+  .status{margin-top:12px;padding:8px;border-radius:8px;display:inline-block;font-weight:700}
+  .ok{background:#ecfdf5;color:#065f46}
+  .warn{background:#fff1f2;color:#9f1239}
+  .muted{color:var(--muted);font-size:13px}
+  table{width:100%;border-collapse:collapse;margin-top:8px}
+  th,td{padding:6px;text-align:left;font-size:13px}
+  th{color:var(--muted);font-weight:600}
+  .big{font-weight:800;font-size:18px}
+  .controls-footer{display:flex;gap:8px;margin-top:12px}
+  button{padding:8px 10px;border-radius:8px;border:0;background:#0f172a;color:#fff;cursor:pointer}
+  button.ghost{background:#f8fafc;color:#0f172a}
+  .small{font-size:12px;color:var(--muted)}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Simple Solar Power Simulator</h1>
+        <p class="lead">Solar → Charge Controller → Battery → Load (Inverter). Interactive demo — frontend only.</p>
+      </div>
+      <div class="small">Low cutoff: <strong>10%</strong> (load disconnect)</div>
+    </header>
+
+    <div class="layout">
+      <!-- controls -->
+      <div class="card">
+        <h3 style="margin-top:0">Inputs & Settings</h3>
+
+        <label>Solar Input (W)</label>
+        <div class="row"><input id="solarInput" type="range" min="0" max="200" step="1" value="80"><div class="val" id="solarVal">80 W</div></div>
+
+        <label>Load Power (W)</label>
+        <div class="row"><input id="loadInput" type="range" min="0" max="500" step="1" value="120"><div class="val" id="loadVal">120 W</div></div>
+
+        <label>Battery Size (Wh)</label>
+        <div class="row"><input id="batSize" type="number" min="50" max="10000" step="10" value="480"><div class="val">Wh</div></div>
+
+        <label>Battery State of Charge (%)</label>
+        <div class="row"><input id="batSoc" type="range" min="0" max="100" step="1" value="60"><div class="val" id="batSocVal">60 %</div></div>
+
+        <div class="controls-footer">
+          <button id="startBtn">Start</button>
+          <button id="stopBtn" class="ghost">Stop</button>
+          <button id="resetBtn" class="ghost">Reset</button>
+        </div>
+
+        <div style="margin-top:12px">
+          <table>
+            <tr><th>Solar Input</th><td id="txtSolar">80 W</td></tr>
+            <tr><th>Load Demand</th><td id="txtLoad">120 W</td></tr>
+            <tr><th>Battery</th><td id="txtBat">60% (288 Wh)</td></tr>
+            <tr><th>Status</th><td id="txtStatus">Idle</td></tr>
+          </table>
+        </div>
+
+        <p class="small" style="margin-top:10px">Behaviour: solar first supplies load, surplus charges battery; battery discharges when solar insufficient. Load auto disconnect if SOC ≤ 10% (reconnect when SOC &gt; 15% or solar covers load).</p>
+      </div>
+
+      <!-- diagram -->
+      <div class="card">
+        <h3 style="margin-top:0">Diagram & Live View</h3>
+
+        <div class="diagram" role="img" aria-label="Solar power circuit">
+          <div class="node" style="width:180px">
+            <div id="sunIcon" class="sun">☀️</div>
+            <div class="muted">Solar Panel</div>
+            <div class="muted small">200 W max</div>
+            <div class="flowBar"><div id="flowSolar" class="flowFill solar"></div></div>
+          </div>
+
+          <div class="node">
+            <div class="controller">⚙️<br>Charge Controller</div>
+            <div class="muted small">MPPT / regulator</div>
+            <div class="flowBar"><div id="flowController" class="flowFill solar"></div></div>
+          </div>
+
+          <div class="node">
+            <div class="batteryVisual" aria-hidden="true">
+              <div id="batteryLevel" class="batteryLevel" style="height:60%"></div>
+            </div>
+            <div class="batteryLabel" id="batteryPct">60%</div>
+            <div class="muted small" id="batteryWh">~288 Wh</div>
+            <div class="flowBar"><div id="flowBatt" class="flowFill batt"></div></div>
+          </div>
+
+          <div class="node" id="loadNode">
+            <div id="loadIcon" style="font-size:28px">💡</div>
+            <div class="muted" id="loadLabel">Load / Inverter</div>
+            <div class="flowBar"><div id="flowLoad" class="flowFill load"></div></div>
+          </div>
+        </div>
+
+        <div style="margin-top:12px">
+          <div id="statusBadge" class="status ok">Idle</div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+<script>
+/*
+  Simple Solar Simulation
+  - solarW: user input (W)
+  - loadW: user input (W)
+  - battery: size (Wh) and current Wh (from SOC%)
+  - tick every 1s (simulated real-time). Convert W to Wh for each second:
+      Wh = W * dt_seconds / 3600
+  - behavior:
+      solar supplies load first. surplus -> battery (if not full).
+      deficit -> battery discharges until low cutoff (10%). If SOC <= 10% load disconnect.
+      reconnect when SOC > 15% OR solar >= load (so solar can power load directly).
+*/
+
+const solarInput = document.getElementById('solarInput');
+const loadInput = document.getElementById('loadInput');
+const batSizeInput = document.getElementById('batSize');
+const batSocInput = document.getElementById('batSoc');
+
+const solarVal = document.getElementById('solarVal');
+const loadVal = document.getElementById('loadVal');
+const batSocVal = document.getElementById('batSocVal');
+
+const txtSolar = document.getElementById('txtSolar');
+const txtLoad = document.getElementById('txtLoad');
+const txtBat = document.getElementById('txtBat');
+const txtStatus = document.getElementById('txtStatus');
+
+const flowSolar = document.getElementById('flowSolar');
+const flowController = document.getElementById('flowController');
+const flowBatt = document.getElementById('flowBatt');
+const flowLoad = document.getElementById('flowLoad');
+
+const batteryLevel = document.getElementById('batteryLevel');
+const batteryPct = document.getElementById('batteryPct');
+const batteryWhText = document.getElementById('batteryWh');
+
+const statusBadge = document.getElementById('statusBadge');
+const sunIcon = document.getElementById('sunIcon');
+const loadIcon = document.getElementById('loadIcon');
+
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+const resetBtn = document.getElementById('resetBtn');
+
+let timer = null;
+const tickMs = 1000; // real-time tick
+let lowCutoff = 10; // % battery at or below this -> disconnect load
+let reconnectThreshold = 15; // % to auto-reconnect
+
+// battery state
+let batterySizeWh = Number(batSizeInput.value);
+let batteryWh = (Number(batSocInput.value) / 100) * batterySizeWh;
+let loadConnected = true; // whether load is allowed to run
+let status = 'Idle';
+
+// helpers
+function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+
+// UI init / binding
+function updateInputsDisplay(){
+  solarVal.textContent = solarInput.value + ' W';
+  loadVal.textContent = loadInput.value + ' W';
+  batSocVal.textContent = batSocInput.value + ' %';
+  txtSolar.textContent = solarInput.value + ' W';
+  txtLoad.textContent = loadInput.value + ' W';
+  batterySizeWh = Number(batSizeInput.value) || 480;
+  batteryWh = clamp(((Number(batSocInput.value) || 50)/100) * batterySizeWh, 0, batterySizeWh);
+  txtBat.textContent = Math.round((batteryWh / batterySizeWh)*100) + '% (' + Math.round(batteryWh) + ' Wh)';
+  batteryLevel.style.height = ((batteryWh / batterySizeWh) * 100) + '%';
+  batteryPct.textContent = Math.round((batteryWh / batterySizeWh) * 100) + '%';
+  batteryWhText.textContent = '~' + Math.round(batteryWh) + ' Wh';
+}
+solarInput.addEventListener('input', ()=>{
+  solarVal.textContent = solarInput.value + ' W';
+  txtSolar.textContent = solarInput.value + ' W';
+  // sun glow
+  sunIcon.classList.toggle('glow', Number(solarInput.value) > 40);
+});
+loadInput.addEventListener('input', ()=>{
+  loadVal.textContent = loadInput.value + ' W';
+  txtLoad.textContent = loadInput.value + ' W';
+});
+batSizeInput.addEventListener('input', ()=>{ updateInputsDisplay(); });
+batSocInput.addEventListener('input', ()=>{ updateInputsDisplay(); });
+
+// simulation step
+function step(){
+  const dt = tickMs/1000; // seconds simulated in each tick = 1s real time
+  const solarW = Number(solarInput.value);
+  const loadW = Number(loadInput.value);
+
+  // If load is disconnected (due to low battery), treat load as 0
+  const activeLoadW = loadConnected ? loadW : 0;
+
+  // energy for this tick (Wh)
+  const solarWh = solarW * dt / 3600;
+  const loadWh = activeLoadW * dt / 3600;
+
+  // supply from solar first
+  // solar supplies min(solarWh, loadWh)
+  let solarToLoadWh = Math.min(solarWh, loadWh);
+  let remainingLoadWh = Math.max(0, loadWh - solarToLoadWh);
+
+  // if solar > load then surplus can charge battery
+  let solarSurplusWh = Math.max(0, solarWh - solarToLoadWh);
+
+  // battery behaviour
+  // discharge to cover remainingLoadWh (if battery has above low reserve)
+  const minReserveWh = lowCutoff/100 * batterySizeWh;
+  let availableDischargeWh = Math.max(0, batteryWh - minReserveWh);
+
+  let battToLoadWh = Math.min(availableDischargeWh, remainingLoadWh);
+  remainingLoadWh = Math.max(0, remainingLoadWh - battToLoadWh);
+
+  // if still unmet load and loadConnected is true -> load will be unmet (we could simulate grid here)
+  const unmetWh = remainingLoadWh;
+
+  // charge battery from solar surplus (respecting battery capacity)
+  const headroomWh = Math.max(0, batterySizeWh - batteryWh);
+  const chargeFromSolarWh = Math.min(solarSurplusWh, headroomWh);
+
+  // net battery change = chargeFromSolarWh - battToLoadWh
+  batteryWh = clamp(batteryWh + chargeFromSolarWh - battToLoadWh, 0, batterySizeWh);
+
+  // update SOC percent
+  const socPct = (batteryWh / batterySizeWh) * 100;
+
+  // decide load connect/disconnect logic
+  // If battery SOC <= lowCutoff -> disconnect load
+  if(socPct <= lowCutoff){
+    loadConnected = false;
+  } else if(!loadConnected){
+    // reconnect rule: if SOC > reconnectThreshold OR solar alone covers load
+    if(socPct > reconnectThreshold || solarW >= loadW){
+      loadConnected = true;
+    }
+  }
+
+  // Update flows (instant W approximations)
+  const solarToLoadW = solarToLoadWh * 3600 / dt;
+  const battToLoadW = battToLoadWh * 3600 / dt;
+  const chargeW = chargeFromSolarWh * 3600 / dt;
+  const unmetW = unmetWh * 3600 / dt;
+
+  // Update UI flows and visuals
+  flowSolar.style.width = Math.min(100, (solarToLoadW / Math.max(loadW,1)) * 100) + '%';
+  flowController.style.width = Math.min(100, (chargeW / Math.max(solarW,1)) * 100) + '%';
+  flowBatt.style.width = Math.min(100, (battToLoadW / Math.max(loadW,1)) * 100) + '%';
+  flowLoad.style.width = Math.min(100, ( (solarToLoadW + battToLoadW) / Math.max(loadW,1) ) * 100) + '%';
+
+  // Visual battery level
+  batteryLevel.style.height = (socPct) + '%';
+  batteryPct.textContent = Math.round(socPct) + '%';
+  batteryWhText.textContent = '~' + Math.round(batteryWh) + ' Wh';
+
+  // Status messages
+  if(!loadConnected){
+    status = 'Low Battery – Load Cut Off';
+    statusBadge.className = 'status warn';
+    txtStatus.textContent = status;
+  } else if(unmetW > 0){
+    status = 'Battery supporting load (grid required for full supply)';
+    statusBadge.className = 'status warn';
+    txtStatus.textContent = status;
+  } else if(chargeW > 0 && solarToLoadW >= loadW){
+    status = 'Running — Solar powering load & charging battery';
+    statusBadge.className = 'status ok';
+    txtStatus.textContent = status;
+  } else if(battToLoadW > 0){
+    status = 'Running — Battery discharging to supply load';
+    statusBadge.className = 'status ok';
+    txtStatus.textContent = status;
+  } else if(solarToLoadW >= loadW){
+    status = 'Running — Solar powering load';
+    statusBadge.className = 'status ok';
+    txtStatus.textContent = status;
+  } else {
+    status = 'Idle / Standby';
+    statusBadge.className = 'status ok';
+    txtStatus.textContent = status;
+  }
+
+  // Text summary values
+  txtSolar.textContent = solarW + ' W';
+  txtLoad.textContent = loadW + ' W';
+  txtBat.textContent = Math.round(socPct) + '% (' + Math.round(batteryWh) + ' Wh)';
+
+  // sun glow based on solar input
+  sunIcon.classList.toggle('glow', solarW > 40);
+  // load icon dim if disconnected
+  loadIcon.style.opacity = loadConnected ? '1' : '0.25';
+  loadLabel.textContent = loadConnected ? 'Load / Inverter' : 'Load (OFF)';
+
+}
+
+startBtn.addEventListener('click', ()=> {
+  if(timer) return;
+  updateInputsDisplay();
+  timer = setInterval(step, tickMs);
+});
+stopBtn.addEventListener('click', ()=> {
+  if(timer) clearInterval(timer);
+  timer = null;
+});
+resetBtn.addEventListener('click', ()=> {
+  if(timer) clearInterval(timer);
+  timer = null;
+  solarInput.value = 80;
+  loadInput.value = 120;
+  batSizeInput.value = 480;
+  batSocInput.value = 60;
+  loadConnected = true;
+  updateInputsDisplay();
+  step();
+});
+
+// initial paint
+updateInputsDisplay();
+step();
+
+</script>
+</body>
+</html>

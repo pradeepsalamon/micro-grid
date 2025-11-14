@@ -1,0 +1,603 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Microgrid Frontend Prototype — Solar + Wind + Battery + AI</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#f5f7fb; --card:#ffffff; --muted:#6b7280;
+    --solar:#16a34a; --wind:#06b6d4; --battery:#f97316; --grid:#ef4444; --ok:#059669;
+    font-family:Inter,system-ui,Segoe UI,Roboto,Arial;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:#0f172a;padding:18px}
+  .wrap{max-width:1200px;margin:0 auto}
+  header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+  h1{font-size:20px;margin:0}
+  p.lead{margin:0;color:var(--muted);font-size:13px}
+  .layout{display:grid;grid-template-columns:360px 1fr;gap:14px}
+  @media(max-width:980px){.layout{grid-template-columns:1fr}}
+  .card{background:var(--card);border-radius:12px;padding:12px;box-shadow:0 8px 24px rgba(2,6,23,0.06)}
+  label{font-size:13px;color:var(--muted);display:block;margin-bottom:6px}
+  .control-row{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+  input[type=range]{flex:1}
+  .val{width:90px;text-align:right;font-weight:700}
+  .appliance{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px dashed #eef2f7}
+  .muted{color:var(--muted);font-size:13px}
+  .progress{height:14px;background:#f1f5f9;border-radius:999px;overflow:hidden}
+  .fill{height:100%;width:0%;border-radius:999px;transition:width 300ms linear}
+  .fill.solar{background:linear-gradient(90deg,var(--solar),#34d399)}
+  .fill.wind{background:linear-gradient(90deg,var(--wind),#60a5fa)}
+  .fill.batt{background:linear-gradient(90deg,var(--battery),#fb923c)}
+  .fill.grid{background:linear-gradient(90deg,var(--grid),#fb7185)}
+  .diagram{display:flex;gap:12px;align-items:center;justify-content:space-between}
+  .node{padding:8px 10px;border-radius:8px;background:#fbfdff;border:1px solid #eef2f6;text-align:center;width:140px}
+  .flow{height:10px;border-radius:6px;background:#e6eef2;overflow:hidden;margin-top:6px}
+  .flow > div{height:100%;transition:width 300ms linear}
+  .controls-title{display:flex;justify-content:space-between;align-items:center}
+  .top-legend{display:flex;gap:8px;align-items:center}
+  .sw{width:12px;height:12px;border-radius:3px}
+  table{width:100%;border-collapse:collapse}
+  th,td{padding:6px;text-align:left;font-size:13px}
+  th{color:var(--muted);font-weight:600}
+  td.num{font-weight:700;text-align:right}
+  .status-msg{display:inline-block;padding:8px 10px;border-radius:10px;font-weight:700}
+  .ok{background:#ecfdf5;color:#065f46}
+  .charging{background:#ecfeff;color:#065f46}
+  .discharge{background:#fff7ed;color:#92400e}
+  .grid-needed{background:#fff1f2;color:#9f1239}
+  .small{font-size:12px;color:var(--muted)}
+  .controls-footer{display:flex;gap:8px;margin-top:8px}
+  .btn{padding:8px 10px;border-radius:8px;border:0;background:#111827;color:#fff;cursor:pointer}
+  .btn.ghost{background:#f8fafc;color:#0f172a}
+  canvas{background:#fff;border-radius:8px}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Microgrid Frontend Prototype</h1>
+        <p class="lead">Solar + Wind + Charge Controllers + Battery + Inverter + Grid + AI/Manual microcontroller (frontend only)</p>
+      </div>
+      <div class="top-legend card" style="padding:8px 10px;border-radius:10px">
+        <span class="sw" style="background:var(--solar)"></span>&nbsp;<small class="small">Solar</small>
+        &nbsp;&nbsp;
+        <span class="sw" style="background:var(--wind)"></span>&nbsp;<small class="small">Wind</small>
+        &nbsp;&nbsp;
+        <span class="sw" style="background:var(--battery)"></span>&nbsp;<small class="small">Battery</small>
+        &nbsp;&nbsp;
+        <span class="sw" style="background:var(--grid)"></span>&nbsp;<small class="small">Grid</small>
+      </div>
+    </header>
+
+    <div class="layout">
+      <!-- Controls column -->
+      <div class="card">
+        <div class="controls-title">
+          <h3 style="margin:0">Controls & Sensors</h3>
+          <small class="small">Adjust inputs</small>
+        </div>
+
+        <div style="margin-top:8px">
+          <label>Solar irradiance (0 - 1000 W/m²)</label>
+          <div class="control-row"><input id="irr" type="range" min="0" max="1000" step="10" value="600"><div class="val" id="irrVal">600 W/m²</div></div>
+
+          <label>Wind speed (0 - 20 m/s)</label>
+          <div class="control-row"><input id="wind" type="range" min="0" max="20" step="0.1" value="6"><div class="val" id="windVal">6.0 m/s</div></div>
+
+          <label>Battery SOC (initial %)</label>
+          <div class="control-row"><input id="socInit" type="range" min="0" max="100" step="1" value="60"><div class="val" id="socInitVal">60 %</div></div>
+
+          <label>Load demand manual slider (0 - 500 W)</label>
+          <div class="control-row"><input id="loadManual" type="range" min="0" max="500" step="5" value="150"><div class="val" id="loadManualVal">150 W</div></div>
+
+          <label>Grid availability</label>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+            <label style="display:flex;gap:8px;align-items:center"><input id="gridAvail" type="checkbox" checked> Grid Available</label>
+            <div style="flex:1"></div>
+          </div>
+
+          <label>Simulation speed</label>
+          <div class="control-row">
+            <select id="speed">
+              <option value="1">Real-Time ×1 (1s = 1s)</option>
+              <option value="60">Fast ×60 (1s = 1min)</option>
+              <option value="600">Fast ×600 (1s = 10min)</option>
+              <option value="3600">Fast ×3600 (1s = 1hr)</option>
+            </select>
+            <div class="val small">scale</div>
+          </div>
+
+          <label>AI Control</label>
+          <div style="display:flex;gap:12px;align-items:center">
+            <label style="display:flex;gap:8px;align-items:center"><input id="aiToggle" type="checkbox" checked> AI ON</label>
+            <div class="small">When OFF you can use manual switches below</div>
+          </div>
+
+          <hr style="border:none;border-top:1px dashed #eef2f7;margin:12px 0">
+
+          <label>Manual switches (if AI OFF)</label>
+          <div id="manualSwitches" class="small" style="margin-bottom:8px">
+            <label><input type="checkbox" id="sw_solar" checked> Connect Solar</label><br>
+            <label><input type="checkbox" id="sw_wind" checked> Connect Wind</label><br>
+            <label><input type="checkbox" id="sw_batt" checked> Allow Battery Discharge</label><br>
+            <label><input type="checkbox" id="sw_grid" checked> Allow Grid</label><br>
+          </div>
+
+          <label>Appliances (toggle ON/OFF)</label>
+          <div id="appliances" style="margin-bottom:8px">
+            <!-- appliances will be injected -->
+          </div>
+
+          <div class="controls-footer">
+            <button class="btn" id="startBtn">Start</button>
+            <button class="btn ghost" id="stopBtn">Stop</button>
+            <button class="btn ghost" id="resetBtn">Reset</button>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Dashboard / visualization -->
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px">
+          <div style="flex:1">
+            <div class="muted">Battery SOC</div>
+            <div style="display:flex;align-items:center;gap:12px;margin-top:6px">
+              <div style="flex:1"><div class="progress"><div id="socBar" class="fill batt" style="width:60%"></div></div></div>
+              <div style="width:90px;text-align:right;font-weight:800" id="socText">60 %</div>
+            </div>
+            <div class="small" id="battWhText">Usable ≈ 960 Wh</div>
+          </div>
+
+          <div style="width:240px">
+            <div class="muted">Instant generation</div>
+            <div style="display:flex;gap:8px;margin-top:6px">
+              <div style="flex:1;text-align:center" class="node"><div class="muted">Solar</div><div id="solarText" style="font-weight:800">0 W</div></div>
+              <div style="flex:1;text-align:center" class="node"><div class="muted">Wind</div><div id="windText" style="font-weight:800">0 W</div></div>
+            </div>
+          </div>
+
+          <div style="width:160px">
+            <div class="muted">Load</div>
+            <div id="loadText" style="font-weight:800;font-size:18px">0 W</div>
+            <div class="small">Manual slider overrides appliances total</div>
+          </div>
+        </div>
+
+        <!-- diagram -->
+        <div class="diagram" style="margin-bottom:12px">
+          <div>
+            <div class="node">Solar<br><span class="small">Panel 200W</span>
+              <div class="flow" style="margin-top:8px"><div id="flowSolar" style="width:0%;background:var(--solar)"></div></div>
+            </div>
+            <div style="height:6px"></div>
+            <div class="node">Wind<br><span class="small">Turbine 100W</span>
+              <div class="flow" style="margin-top:8px"><div id="flowWind" style="width:0%;background:var(--wind)"></div></div>
+            </div>
+          </div>
+
+          <div style="text-align:center">
+            <div class="node">Charge Controllers<br><span class="small">Manage charge to battery</span></div>
+            <div style="height:8px"></div>
+            <div class="node">Hybrid Inverter<br><span class="small">DC→AC</span></div>
+          </div>
+
+          <div>
+            <div class="node">Battery<br><span class="small">12V 100Ah</span>
+              <div class="flow" style="margin-top:8px"><div id="flowBatt" style="width:0%;background:var(--battery)"></div></div>
+            </div>
+            <div style="height:6px"></div>
+            <div class="node">Grid<br><span class="small">Utility</span>
+              <div class="flow" style="margin-top:8px"><div id="flowGrid" style="width:0%;background:var(--grid)"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- contributions -->
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+          <div style="flex:1">
+            <div class="muted">Solar → Load</div><div style="font-weight:800" id="s2l">0 W</div>
+            <div style="margin-top:8px" class="progress"><div id="barS" class="fill solar" style="width:0%"></div></div>
+          </div>
+          <div style="flex:1">
+            <div class="muted">Wind → Load</div><div style="font-weight:800" id="w2l">0 W</div>
+            <div style="margin-top:8px" class="progress"><div id="barW" class="fill wind" style="width:0%"></div></div>
+          </div>
+          <div style="flex:1">
+            <div class="muted">Battery → Load</div><div style="font-weight:800" id="b2l">0 W</div>
+            <div style="margin-top:8px" class="progress"><div id="barB" class="fill batt" style="width:0%"></div></div>
+          </div>
+        </div>
+
+        <div style="margin-bottom:12px">
+          <div class="muted">Grid → Load</div><div style="font-weight:800" id="g2l">0 W</div>
+          <div style="margin-top:8px" class="progress"><div id="barG" class="fill grid" style="width:0%"></div></div>
+        </div>
+
+        <div style="display:flex;gap:8px;align-items:center;justify-content:space-between">
+          <div>
+            <div class="muted">Charging / Discharging</div>
+            <div style="display:flex;gap:8px;margin-top:6px">
+              <div class="node" style="width:150px;text-align:center"><div class="small">Solar charge</div><div id="chgS">0 W</div></div>
+              <div class="node" style="width:150px;text-align:center"><div class="small">Wind charge</div><div id="chgW">0 W</div></div>
+              <div class="node" style="width:150px;text-align:center"><div class="small">Battery net</div><div id="bNet">0 W</div></div>
+            </div>
+          </div>
+
+          <div style="width:360px">
+            <div class="muted">Appliance consumption</div>
+            <table style="margin-top:6px"><thead><tr><th>Appliance</th><th>State</th><th style="text-align:right">Power (W)</th></tr></thead><tbody id="appTable"></tbody></table>
+          </div>
+        </div>
+
+        <div style="margin-top:12px">
+          <div class="muted">Status</div>
+          <div id="statusBox" class="status-msg ok">Idle</div>
+        </div>
+
+        <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
+          <canvas id="chart" height="120"></canvas>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <script>
+/* ----------------------------
+   Simulation configuration
+   ---------------------------- */
+const SOLAR_RATED_W = 200;      // at 1000 W/m^2
+const WIND_RATED_W = 100;       // at 20 m/s (we'll use 20m/s as reference)
+const WIND_REF = 20;
+const BATT_TOTAL_WH = 1200;     // 12V * 100Ah = 1200 Wh
+const BATT_USABLE_WH = BATT_TOTAL_WH * 0.8; // 80% DoD → usable ~960 Wh
+const MIN_SOC_PERCENT = 20;     // reserve SOC
+const UPDATE_INTERVAL_MS = 1000; // UI tick ms (real-time). simulation scale multiplies dt seconds per tick
+
+/* ----------------------------
+   App state
+   ---------------------------- */
+let simRunning = false;
+let simScale = 1; // seconds simulated per 1 real second
+let battWh = (60/100) * BATT_USABLE_WH; // initial from UI default
+let history = { t:[], solar:[], wind:[], load:[], soc:[] };
+
+/* Appliances list */
+const APPS = [
+  {id:'led1', name:'LED 1', power:10, state:true},
+  {id:'led2', name:'LED 2', power:10, state:true},
+  {id:'fan',  name:'Fan', power:50, state:false},
+  {id:'laptop', name:'Laptop', power:60, state:false},
+  {id:'tv', name:'TV', power:100, state:false},
+  {id:'heater', name:'Water Heater', power:1000, state:false},
+  {id:'ac', name:'AC', power:1500, state:false},
+  {id:'router', name:'Router', power:20, state:true},
+  {id:'phone', name:'Phone Charger', power:5, state:true}
+];
+
+/* DOM refs */
+const irrEl = document.getElementById('irr'), irrVal = document.getElementById('irrVal');
+const windEl = document.getElementById('wind'), windVal = document.getElementById('windVal');
+const socInitEl = document.getElementById('socInit'), socInitVal = document.getElementById('socInitVal');
+const loadManual = document.getElementById('loadManual'), loadManualVal = document.getElementById('loadManualVal');
+const gridAvail = document.getElementById('gridAvail');
+const speedSel = document.getElementById('speed');
+const aiToggle = document.getElementById('aiToggle');
+const manualSwitches = { solar: document.getElementById('sw_solar'), wind: document.getElementById('sw_wind'), batt: document.getElementById('sw_batt'), grid: document.getElementById('sw_grid') };
+
+const startBtn = document.getElementById('startBtn'), stopBtn = document.getElementById('stopBtn'), resetBtn = document.getElementById('resetBtn');
+
+const solarText = document.getElementById('solarText'), windText = document.getElementById('windText'), loadText = document.getElementById('loadText');
+const s2lEl = document.getElementById('s2l'), w2lEl = document.getElementById('w2l'), b2lEl = document.getElementById('b2l'), g2lEl = document.getElementById('g2l');
+const barS = document.getElementById('barS'), barW = document.getElementById('barW'), barB = document.getElementById('barB'), barG = document.getElementById('barG');
+const chgS = document.getElementById('chgS'), chgW = document.getElementById('chgW'), bNet = document.getElementById('bNet');
+const flowSolar = document.getElementById('flowSolar'), flowWind = document.getElementById('flowWind'), flowBatt = document.getElementById('flowBatt'), flowGrid = document.getElementById('flowGrid');
+const socBar = document.getElementById('socBar'), socText = document.getElementById('socText'), battWhText = document.getElementById('battWhText');
+const statusBox = document.getElementById('statusBox');
+const appTable = document.getElementById('appTable');
+const chartCanvas = document.getElementById('chart');
+
+let tickTimer = null;
+
+/* Chart.js setup */
+const ctx = chartCanvas.getContext('2d');
+const chart = new Chart(ctx, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [
+      { label:'Solar (W)', data:[], borderColor: 'rgba(16,163,130,0.9)', backgroundColor:'rgba(16,163,130,0.08)', tension:0.3 },
+      { label:'Wind (W)', data:[], borderColor: 'rgba(6,182,212,0.9)', backgroundColor:'rgba(6,182,212,0.06)', tension:0.3 },
+      { label:'Load (W)', data:[], borderColor: 'rgba(66,66,66,0.9)', backgroundColor:'rgba(66,66,66,0.06)', tension:0.3 },
+      { label:'Battery SOC (%)', data:[], borderColor: 'rgba(249,115,22,0.9)', backgroundColor:'rgba(249,115,22,0.06)', yAxisID:'y2', tension:0.3 }
+    ]
+  },
+  options: {
+    animation:false,
+    responsive:true,
+    interaction:{mode:'index'},
+    scales: {
+      y: { beginAtZero:true },
+      y2: { position:'right', beginAtZero:true, max:100, grid:{display:false} },
+      x: { ticks:{display:false} }
+    },
+    plugins: { legend:{position:'bottom'} }
+  }
+});
+
+/* ---------- Helper functions ---------- */
+function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+function computeSolarW(irr){ return (irr/1000) * SOLAR_RATED_W; }
+function computeWindW(ws){
+  const r = clamp(ws / WIND_REF, 0, 1);
+  return Math.pow(r, 3) * WIND_RATED_W; // cubic scaling with cap
+}
+function getApplianceLoad(){
+  // if manual slider > 0, use that as total load override; otherwise sum appliances
+  const override = Number(loadManual.value);
+  const anyApplianceOn = APPS.some(a=>a.state);
+  if(override > 0 && !anyApplianceOn){
+    // if user uses slider but appliances off, use slider as total demand
+    return override;
+  }
+  // sum of appliances (if slider >0 we still allow it to override total)
+  const sum = APPS.reduce((s,a)=> s + (a.state? a.power : 0), 0);
+  return override > 0 ? override : sum;
+}
+
+/* Update DOM lists & labels */
+function initUI(){
+  // appliances list
+  appTable.innerHTML = '';
+  const appsDiv = document.getElementById('appliances');
+  appsDiv.innerHTML = '';
+  APPS.forEach(app=>{
+    const row = document.createElement('div');
+    row.className = 'appliance';
+    row.innerHTML = `<div style="display:flex;gap:8px;align-items:center"><input id="chk_${app.id}" type="checkbox" ${app.state?'checked':''}><div><div style="font-weight:700">${app.name}</div><div class="muted">${app.power} W</div></div></div><div style="text-align:right;width:70px" id="ap_pw_${app.id}">${app.state?app.power:0} W</div>`;
+    appsDiv.appendChild(row);
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${app.name}</td><td id="ap_st_${app.id}">${app.state?'ON':'OFF'}</td><td class="num" id="ap_pw_table_${app.id}">${app.state?app.power:0} W</td>`;
+    appTable.appendChild(tr);
+
+    document.getElementById('chk_'+app.id).addEventListener('change', (e)=>{
+      app.state = e.target.checked;
+    });
+  }
+
+  );
+
+  // initial labels
+  irrVal.textContent = irrEl.value + ' W/m²';
+  windVal.textContent = Number(windEl.value).toFixed(1) + ' m/s';
+  socInitVal.textContent = socInitEl.value + ' %';
+  loadManualVal.textContent = loadManual.value + ' W';
+  battWh = (Number(socInitEl.value)/100) * BATT_USABLE_WH;
+  battWhText.textContent = `Usable ≈ ${Math.round(BATT_USABLE_WH)} Wh`;
+  updateUI(0,0,0,0,0,0,0,0); // initial paint
+}
+
+/* Update UI with numbers */
+function updateUI(solarW, windW, loadW, s2l, w2l, b2l, g2l, chgNetW){
+  solarText.textContent = Math.round(solarW) + ' W';
+  windText.textContent = Math.round(windW) + ' W';
+  loadText.textContent = Math.round(loadW) + ' W';
+
+  s2lEl.textContent = Math.round(s2l) + ' W';
+  w2lEl.textContent = Math.round(w2l) + ' W';
+  b2lEl.textContent = Math.round(b2l) + ' W';
+  g2lEl.textContent = Math.round(g2l) + ' W';
+
+  chgS.textContent = (chgNetW>0? '+'+Math.round(chgNetW)+' W' : Math.round(chgNetW)+' W');
+  chgW.textContent = ''; // we update more detailed below
+  bNet.textContent = (chgNetW>0? 'Charging '+Math.round(chgNetW)+' W' : (chgNetW<0? 'Discharging '+Math.abs(Math.round(chgNetW))+' W' : '0 W'));
+
+  // flows as widths (relative)
+  const denom = Math.max(loadW, SOLAR_RATED_W + WIND_RATED_W, 1);
+  barS.style.width = Math.min(100, Math.abs(s2l)/denom*100) + '%';
+  barW.style.width = Math.min(100, Math.abs(w2l)/denom*100) + '%';
+  barB.style.width = Math.min(100, Math.abs(b2l)/denom*100) + '%';
+  barG.style.width = Math.min(100, Math.abs(g2l)/denom*100) + '%';
+
+  flowSolar.style.width = Math.min(100, Math.abs(s2l)/denom*100) + '%';
+  flowWind.style.width = Math.min(100, Math.abs(w2l)/denom*100) + '%';
+  flowBatt.style.width = Math.min(100, Math.abs(b2l)/denom*100) + '%';
+  flowGrid.style.width = Math.min(100, Math.abs(g2l)/denom*100) + '%';
+
+  // battery SOC / bar
+  const socPct = Math.round((battWh / BATT_USABLE_WH) * 100);
+  socBar.style.width = socPct + '%';
+  socText.textContent = socPct + ' %';
+
+  // update appliance table numbers
+  APPS.forEach(app=>{
+    const st = document.getElementById('ap_st_'+app.id);
+    const pw = document.getElementById('ap_pw_table_'+app.id);
+    st.textContent = app.state? 'ON' : 'OFF';
+    pw.textContent = (app.state ? app.power : 0) + ' W';
+    const pwDiv = document.getElementById('ap_pw_'+app.id);
+    if(pwDiv) pwDiv.textContent = (app.state ? app.power : 0) + ' W';
+  });
+}
+
+/* AI / microcontroller logic (simple rule-based) */
+function microcontrollerStep(solarW, windW, loadW, dtSec){
+  // Inputs: current generation and load (W), time step seconds
+  // Priority: solar -> wind -> battery (if SOC > MIN_SOC) -> grid
+  // If surplus: charge battery up to headroom
+  // Manual switches override when AI OFF
+
+  const allowSolar = aiToggle.checked ? true : manualSwitches.solar.checked;
+  const allowWind  = aiToggle.checked ? true : manualSwitches.wind.checked;
+  const allowBatt  = aiToggle.checked ? true : manualSwitches.batt.checked;
+  const allowGrid  = aiToggle.checked ? gridAvail.checked : manualSwitches.grid.checked && gridAvail.checked;
+
+  const solarAvailW = allowSolar ? solarW : 0;
+  const windAvailW = allowWind ? windW : 0;
+
+  let remainingLoadW = loadW;
+  // supply from solar first
+  const s2lW = Math.min(solarAvailW, remainingLoadW);
+  remainingLoadW -= s2lW;
+
+  // then wind
+  const w2lW = Math.min(windAvailW, remainingLoadW);
+  remainingLoadW -= w2lW;
+
+  // battery available above reserve (convert Wh/sec)
+  const reserveWh = (MIN_SOC_PERCENT/100) * BATT_USABLE_WH;
+  const battAvailableWh = Math.max(0, battWh - reserveWh);
+  const battAvailableW = (battAvailableWh > 0) ? (battAvailableWh * 3600 / dtSec) : 0; // instant W capacity for this tick (approx)
+  let b2lW = 0;
+  if(allowBatt && battAvailableWh > 0){
+    b2lW = Math.min(battAvailableW, remainingLoadW);
+    remainingLoadW -= b2lW;
+  }
+
+  // grid covers rest if allowed
+  const g2lW = (allowGrid) ? remainingLoadW : remainingLoadW; // if grid DISALLOWED we simply mark deficit as unmet (we still treat as grid needed)
+  const unmetW = allowGrid ? 0 : remainingLoadW;
+
+  // energies in Wh for dt
+  const s2lWh = s2lW * dtSec / 3600;
+  const w2lWh = w2lW * dtSec / 3600;
+  const b2lWh = b2lW * dtSec / 3600;
+  const g2lWh = (allowGrid ? g2lW * dtSec / 3600 : 0);
+
+  // surplus generation (gen - used by load)
+  const genWh = (solarAvailW + windAvailW) * dtSec / 3600;
+  const usedGenWh = s2lWh + w2lWh;
+  let surplusWh = Math.max(0, genWh - usedGenWh);
+
+  // charge battery from surplus (respect headroom)
+  let chgWh = 0;
+  if(surplusWh > 0 && allowBatt){
+    const headroomWh = BATT_USABLE_WH - battWh;
+    chgWh = Math.min(surplusWh, headroomWh);
+    // Allocate charging proportionally to solar/wind surplus
+    // but for UI we just report combined charging
+  }
+
+  // battery net change = charge - discharge
+  battWh = clamp(battWh + chgWh - b2lWh, 0, BATT_USABLE_WH);
+
+  // Determine status message
+  let status = '';
+  if(g2lW > 0 && !allowGrid) {
+    status = '⚠ Grid not allowed — load unmet';
+    statusBox.className = 'status-msg grid-needed';
+  } else if(g2lW > 0 && allowGrid) {
+    if((battWh / BATT_USABLE_WH)*100 <= MIN_SOC_PERCENT) {
+      status = '⚠ Battery low — using Grid';
+      statusBox.className = 'status-msg grid-needed';
+    } else {
+      status = '⚠ Grid support required';
+      statusBox.className = 'status-msg grid-needed';
+    }
+  } else if(chgWh > 0 && (s2lW + w2lW) >= loadW) {
+    // charging and gen covers load
+    // find whether solar or wind is contributing charge
+    const solarSurplusWh = Math.max(0, (solarAvailW * dtSec / 3600) - s2lWh);
+    const windSurplusWh  = Math.max(0, (windAvailW * dtSec / 3600) - w2lWh);
+    if(solarSurplusWh > 0 && windSurplusWh > 0) status = '🔋 Charging from Solar + Wind';
+    else if(solarSurplusWh > 0) status = '🔋 Charging from Solar';
+    else status = '🔋 Charging from Wind';
+    statusBox.className = 'status-msg charging';
+  } else if(b2lW > 0) {
+    status = '🔋 Battery discharging to support load';
+    statusBox.className = 'status-msg discharge';
+  } else if((s2lW + w2lW) >= loadW) {
+    status = '⚡ Fully powered by Solar + Wind';
+    statusBox.className = 'status-msg ok';
+  } else {
+    status = 'Idle / Standby';
+    statusBox.className = 'status-msg ok';
+  }
+
+  // Update UI numeric indicators
+  updateUI(solarW, windW, loadW, s2lW, w2lW, b2lW, g2lW, (chgWh - b2lWh) * 3600 / dtSec);
+
+  // update chart & history
+  const tlabel = new Date().toLocaleTimeString();
+  history.t.push(tlabel);
+  history.solar.push(Math.round(solarW));
+  history.wind.push(Math.round(windW));
+  history.load.push(Math.round(loadW));
+  history.soc.push(Math.round((battWh / BATT_USABLE_WH) * 100));
+  if(history.t.length > 60) {
+    history.t.shift(); history.solar.shift(); history.wind.shift(); history.load.shift(); history.soc.shift();
+  }
+  chart.data.labels = history.t;
+  chart.data.datasets[0].data = history.solar;
+  chart.data.datasets[1].data = history.wind;
+  chart.data.datasets[2].data = history.load;
+  chart.data.datasets[3].data = history.soc;
+  chart.update('none');
+
+  // status text
+  statusBox.textContent = status;
+}
+
+/* Simulation step called each UI tick */
+function step(){
+  // simScale seconds per tick
+  const dtSec = Number(speedSel.value); // seconds simulated per tick (1,60,600,3600)
+  // read sensors
+  const irr = Number(irrEl.value);
+  const ws = Number(windEl.value);
+  const solarW = computeSolarW(irr);
+  const windW = computeWindW(ws);
+
+  // load calculation (manual slider overrides appliance sum)
+  const loadW = getApplianceLoad();
+
+  // call microcontroller logic
+  microcontrollerStep(solarW, windW, loadW, dtSec);
+}
+
+/* UI wiring */
+irrEl.addEventListener('input', ()=>{ irrVal.textContent = irrEl.value + ' W/m²'; });
+windEl.addEventListener('input', ()=>{ windVal.textContent = Number(windEl.value).toFixed(1) + ' m/s'; });
+socInitEl.addEventListener('input', ()=>{ socInitVal.textContent = socInitEl.value + ' %'; });
+loadManual.addEventListener('input', ()=>{ loadManualVal.textContent = loadManual.value + ' W'; });
+
+startBtn.addEventListener('click', ()=>{
+  if(simRunning) return;
+  simRunning = true;
+  // initialize battWh from socInit if starting fresh
+  battWh = clamp((Number(socInitEl.value)/100) * BATT_USABLE_WH, 0, BATT_USABLE_WH);
+  history = { t:[], solar:[], wind:[], load:[], soc:[] };
+  tickTimer = setInterval(step, UPDATE_INTERVAL_MS);
+});
+stopBtn.addEventListener('click', ()=>{
+  simRunning = false;
+  clearInterval(tickTimer);
+  tickTimer = null;
+});
+resetBtn.addEventListener('click', ()=>{
+  // stop and reset to defaults
+  simRunning = false;
+  clearInterval(tickTimer);
+  tickTimer = null;
+  irrEl.value = 600; windEl.value = 6; socInitEl.value = 60; loadManual.value = 150;
+  gridAvail.checked = true; aiToggle.checked = true;
+  APPS.forEach(a=> a.state = true);
+  initUI();
+});
+
+/* initial setup and first paint */
+initUI();
+step();
+
+  </script>
+</body>
+</html>

@@ -1,0 +1,52 @@
+// ===============================================
+// ✅ DC Voltage Sensor - Precisely Calibrated for ESP32
+// Works for 3.7 V → 12 V (and up to ~25 V)
+// Sensor OUT → GPIO32 (ADC1 pin)
+// ===============================================
+
+const int sensorPin = 32;
+float R1 = 30000.0;   // Top resistor (Ω)
+float R2 = 7500.0;    // Bottom resistor (Ω)
+float vRef = 3.3;     // ADC reference voltage
+float adcMax = 4095.0;
+int sampleCount = 10; // Averaging for stability
+
+// 🔧 Linear calibration derived from your real data
+float slope  = 0.969;
+float offset = 0.66;
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  Serial.println("🔋 DC Voltage Sensor (Final Calibrated Version)");
+}
+
+void loop() {
+  long totalADC = 0;
+  for (int i = 0; i < sampleCount; i++) {
+    totalADC += analogRead(sensorPin);
+    delay(10);
+  }
+  float rawValue = totalADC / (float)sampleCount;
+
+  // Voltage at sensor output
+  float vOut = (rawValue * vRef) / adcMax;
+
+  // Raw input voltage before calibration
+  float vIn = vOut * ((R1 + R2) / R2);
+
+  // Apply final calibration
+  float vFinal = (vIn * slope) + offset;
+
+  Serial.print("ADC: ");
+  Serial.print(rawValue, 0);
+  Serial.print(" | Vout: ");
+  Serial.print(vOut, 3);
+  Serial.print(" V | Vin(raw): ");
+  Serial.print(vIn, 2);
+  Serial.print(" V | Vin(calibrated): ");
+  Serial.print(vFinal, 2);
+  Serial.println(" V");
+
+  delay(1000);
+}

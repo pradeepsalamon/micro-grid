@@ -1,0 +1,24 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+// Change 0x27 to your LCD's I2C address
+LiquidCrystal_I2C lcd(0x27, 20, 4);
+
+void setup() {
+  Wire.begin(21, 22); // SDA, SCL
+  lcd.init();          // Initialize the LCD
+  lcd.backlight();     // Turn on the backlight
+  
+  lcd.setCursor(0, 0);
+  lcd.print("ESP32 + 20x4 LCD");
+  lcd.setCursor(0, 1);
+  lcd.print("I2C Interface OK");
+  lcd.setCursor(0, 2);
+  lcd.print("Line 3 Test");
+  lcd.setCursor(0, 3);
+  lcd.print("Line 4 Test");
+}
+
+void loop() {
+  // You can update content dynamically here
+}

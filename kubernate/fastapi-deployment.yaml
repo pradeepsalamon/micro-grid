@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastapi-deployment
+  namespace: microgrid
+  labels:
+    app: fastapi
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fastapi
+  template:
+    metadata:
+      labels:
+        app: fastapi
+    spec:
+      containers:
+        - name: fastapi-container
+          image: fastapi-app:latest        # ✅ Matches your locally built image
+          imagePullPolicy: Never           # ✅ Important for Minikube local builds
+          ports:
+            - containerPort: 8000          # ✅ Exposes FastAPI’s internal port

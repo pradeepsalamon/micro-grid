@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Smart Energy Microgrid Simulation</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f0f4f9; margin: 0; padding: 0; }
+    header { background: #004080; color: white; padding: 10px; text-align: center; }
+    .container { display: flex; gap: 20px; padding: 20px; }
+    .left-panel, .right-panel { flex: 1; background: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+    h2 { color: #004080; font-size: 18px; }
+    .status-box { margin: 10px 0; padding: 10px; border: 1px solid #ddd; border-radius: 8px; background: #fafafa; }
+    .battery-bar { width: 100%; height: 20px; background: #ddd; border-radius: 10px; margin-top: 5px; }
+    .battery-fill { height: 100%; width: 50%; background: #00cc44; border-radius: 10px; }
+    .controls label { display: block; margin-top: 10px; }
+    .diagram { text-align: center; margin-top: 15px; }
+    .flow { color: green; font-weight: bold; }
+    canvas { max-width: 100%; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>⚡ Smart Energy Microgrid Simulation</h1>
+  </header>
+
+  <div class="container">
+    <!-- Left: Sensors + Controls -->
+    <div class="left-panel">
+      <h2>🔧 Simulation Controls</h2>
+      <button id="startBtn">▶ Start</button>
+      <button id="stopBtn">⏸ Stop</button>
+      <label>Simulation Speed:
+        <select id="speedSelect">
+          <option value="1000">1 sec = 1 sec</option>
+          <option value="100">1 sec = 1 min</option>
+          <option value="10">1 sec = 10 min</option>
+          <option value="1">1 sec = 1 hr</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="aiControl"> AI Control</label>
+
+      <h2>🌍 Sensors</h2>
+      <label>Solar Irradiance: <input type="range" id="solarInput" min="0" max="1000" value="500"> <span id="solarVal">500</span> W/m²</label>
+      <label>Wind Speed: <input type="range" id="windInput" min="0" max="20" value="10"> <span id="windVal">10</span> m/s</label>
+      <label>Load Demand: <input type="range" id="loadInput" min="0" max="500" value="200"> <span id="loadVal">200</span> W</label>
+      <label>Grid Available: <input type="checkbox" id="gridInput" checked></label>
+
+      <h2>📂 Import CSV</h2>
+      <input type="file" id="csvFile">
+      <button id="runCsvBtn">▶ Run CSV Simulation</button>
+    </div>
+
+    <!-- Right: System Status + Diagram -->
+    <div class="right-panel">
+      <h2>🔋 System Status</h2>
+      <div class="status-box">Solar Power: <span id="solarPower">0</span> W</div>
+      <div class="status-box">Wind Power: <span id="windPower">0</span> W</div>
+      <div class="status-box">Battery SOC:
+        <div class="battery-bar"><div id="batteryFill" class="battery-fill"></div></div>
+        <span id="batterySoc">50</span> %
+      </div>
+      <div class="status-box">Load Consumption: <span id="loadConsumption">0</span> W</div>
+      <div class="status-box">Grid Status: <span id="gridStatus">ON</span></div>
+      <div class="status-box flow" id="flowStatus">Idle</div>
+
+      <h2>📊 Charts</h2>
+      <canvas id="chartCanvas"></canvas>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    let running = false, timer;
+    let batterySOC = 50;
+    const solarInput = document.getElementById("solarInput");
+    const windInput = document.getElementById("windInput");
+    const loadInput = document.getElementById("loadInput");
+    const batteryFill = document.getElementById("batteryFill");
+
+    // Display updates
+    function updateDisplay(solar, wind, load) {
+      const solarPower = (solar / 1000) * 200;
+      const windPower = (wind / 20) * 100;
+
+      document.getElementById("solarPower").innerText = solarPower.toFixed(1);
+      document.getElementById("windPower").innerText = windPower.toFixed(1);
+      document.getElementById("loadConsumption").innerText = load;
+
+      let supply = solarPower + windPower;
+      if (supply >= load) {
+        batterySOC = Math.min(100, batterySOC + 0.1);
+        document.getElementById("flowStatus").innerText = "Renewables → Load, Battery Charging";
+      } else if (batterySOC > 0) {
+        batterySOC = Math.max(0, batterySOC - 0.2);
+        document.getElementById("flowStatus").innerText = "Battery Discharging → Load";
+      } else if (document.getElementById("gridInput").checked) {
+        document.getElementById("flowStatus").innerText = "Grid → Load";
+      } else {
+        document.getElementById("flowStatus").innerText = "⚠ Load Unserved";
+      }
+
+      document.getElementById("batterySoc").innerText = batterySOC.toFixed(1);
+      batteryFill.style.width = batterySOC + "%";
+    }
+
+    // Sliders live update
+    [solarInput, windInput, loadInput].forEach(inp => {
+      inp.addEventListener("input", () => {
+        document.getElementById(inp.id.replace("Input","Val")).innerText = inp.value;
+        if (!running) updateDisplay(+solarInput.value, +windInput.value, +loadInput.value);
+      });
+    });
+
+    // Start simulation
+    document.getElementById("startBtn").onclick = () => {
+      if (running) return;
+      running = true;
+      const speed = +document.getElementById("speedSelect").value;
+      timer = setInterval(() => {
+        updateDisplay(+solarInput.value, +windInput.value, +loadInput.value);
+      }, speed);
+    };
+
+    // Stop simulation
+    document.getElementById("stopBtn").onclick = () => {
+      running = false;
+      clearInterval(timer);
+    };
+
+    // CSV import
+    document.getElementById("runCsvBtn").onclick = () => {
+      const file = document.getElementById("csvFile").files[0];
+      if (!file) return alert("Upload a CSV file first!");
+      const reader = new FileReader();
+      reader.onload = e => {
+        const rows = e.target.result.split("\n").map(r => r.split(","));
+        let i = 1;
+        running = true;
+        const speed = +document.getElementById("speedSelect").value;
+        timer = setInterval(() => {
+          if (i >= rows.length) { clearInterval(timer); return; }
+          const [solar, wind, load] = rows[i].map(Number);
+          solarInput.value = solar; windInput.value = wind; loadInput.value = load;
+          updateDisplay(solar, wind, load);
+          i++;
+        }, speed);
+      };
+      reader.readAsText(file);
+    };
+
+    // Chart.js demo
+    const ctx = document.getElementById("chartCanvas").getContext("2d");
+    const chart = new Chart(ctx, {
+      type: "line",
+      data: { labels: [], datasets: [
+        { label: "Solar", data: [], borderColor: "orange", fill: false },
+        { label: "Wind", data: [], borderColor: "blue", fill: false },
+        { label: "Load", data: [], borderColor: "red", fill: false }
+      ] },
+      options: { responsive: true, scales: { y: { beginAtZero: true } } }
+    });
+  </script>
+</body>
+</html>
