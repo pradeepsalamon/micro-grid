@@ -50,3 +50,67 @@ void loop() {
 
   delay(1000);
 }
+
+
+
+
+
+
+#define S0 21
+#define S1 22
+#define S2 23
+#define S3 19
+#define ANALOG_PIN 34
+
+// Your sensor real divider factor (based on your test):
+float dividerFactor = 5.56;    // You can adjust this slightly after testing again
+
+void selectChannel9() {
+  digitalWrite(S0, 1);
+  digitalWrite(S1, 0);
+  digitalWrite(S2, 0);
+  digitalWrite(S3, 1);
+}
+
+// Read ADC with settling + dummy read + averaging
+int readMuxAvg(int samples = 20, int settle_ms = 10) {
+  delay(settle_ms);
+  analogRead(ANALOG_PIN);  // dummy read
+  long sum = 0;
+
+  for (int i = 0; i < samples; i++) {
+    sum += analogRead(ANALOG_PIN);
+    delay(1);
+  }
+  return sum / samples;
+}
+
+float rawToVolt(int raw) {
+  return (raw / 4095.0) * 3.3;
+}
+
+float getDCVoltage() {
+  selectChannel9();
+  int raw = readMuxAvg(20, 10);
+  float vout = rawToVolt(raw);
+  float vin = vout * dividerFactor;
+  return vin;
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(S0, OUTPUT);
+  pinMode(S1, OUTPUT);
+  pinMode(S2, OUTPUT);
+  pinMode(S3, OUTPUT);
+  pinMode(ANALOG_PIN, INPUT);
+
+  analogSetPinAttenuation(ANALOG_PIN, ADC_11db); // valid function
+}
+
+void loop() {
+  float vin = getDCVoltage();
+  Serial.printf("Actual DC Voltage = %.2f V\n", vin);
+  delay(500);
+}

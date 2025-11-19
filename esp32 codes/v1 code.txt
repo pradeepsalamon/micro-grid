@@ -1,0 +1,294 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <ZMPT101B.h>
+
+LiquidCrystal_I2C lcd(0x27, 20, 4);
+
+// ---------------- MUX (CD74HC4067) ----------------
+#define MUX_S0 21
+#define MUX_S1 22
+#define MUX_S2 23
+#define MUX_S3 19
+#define MUX_SIG 34  // ADC input
+
+// MUX Channel Mapping
+#define SOLAR_V 8
+#define SOLAR_C 5
+#define WIND_V 9
+#define WIND_C 6
+#define BATTERY_V 7
+#define BATTERY_C 4
+
+// ---------------- Direct AC Voltage Sensors (ZMPT101B) ----------------
+#define CRITICAL_AC_PIN 36      // GPIO 36 for critical load AC voltage
+#define NON_CRITICAL_AC_PIN 39  // GPIO 39 for non-critical load AC voltage
+
+// ZMPT101B Sensor Objects
+ZMPT101B criticalVoltageSensor(CRITICAL_AC_PIN, 50.0);         // 50Hz AC
+ZMPT101B nonCriticalVoltageSensor(NON_CRITICAL_AC_PIN, 50.0);  // 50Hz AC
+
+// Calibration factors - ADJUST THESE BASED ON ACTUAL MEASUREMENTS
+#define CRITICAL_CALIBRATION 3.1       // 245 / 80.1 = 3.06
+#define NON_CRITICAL_CALIBRATION 2.65  // 245 / 93.9 = 2.61
+
+// ----- DC Voltage Sensor Divider -----
+#define REF_VOLTAGE 3.3
+#define ADC_RESOLUTION 4095.0
+#define DIVIDER_FACTOR 5.56  // based on your real 5V test
+
+// ---------------- Variables ----------------
+float solarVoltage, solarCurrent;
+float windVoltage, windCurrent;
+float batteryVoltage, batteryCurrent;
+float criticalVoltage, criticalCurrent;
+float nonCriticalVoltage, nonCriticalCurrent;
+
+// ---------------- Fault Sensor (PC817) ------------
+#define FAULT_PIN 25  // INPUT_PULLUP
+
+// ---------------- Relays --------------------------
+#define RELAY_SOCKET_1 4
+#define RELAY_SOCKET_2 5
+#define RELAY_INVERTER 26
+#define MOSFET_TRIGGER 14
+
+// ---------------- LED Indicators ------------------
+#define LED_G1_GREEN 27
+#define LED_G1_RED 16
+#define LED_G2_GREEN 17
+#define LED_G2_RED 15
+
+// ---------------- I2C -----------------------
+#define I2C_SDA 32
+#define I2C_SCL 33
+
+// ---------------- ZMPT101B Sensitivity -----------------
+#define ZMPT_SENSITIVITY 300.0f  // Adjust this for calibration
+
+/* ---------------- MUX SELECT FUNCTION ---------------- */
+void muxSelect(uint8_t channel) {
+  digitalWrite(MUX_S0, channel & 1);
+  digitalWrite(MUX_S1, (channel >> 1) & 1);
+  digitalWrite(MUX_S2, (channel >> 2) & 1);
+  digitalWrite(MUX_S3, (channel >> 3) & 1);
+}
+
+/* -------------------- READ ADC ----------------------- */
+int readMuxADC(uint8_t channel) {
+  muxSelect(channel);
+  delayMicroseconds(500);  // settle MUX channel
+
+  analogRead(MUX_SIG);  // dummy read
+
+  long total = 0;
+  const int samples = 30;
+
+  for (int i = 0; i < samples; i++) {
+    total += analogRead(MUX_SIG);
+    delayMicroseconds(150);
+  }
+
+  return total / samples;
+}
+
+/* ------------- DC VOLTAGE MEASUREMENT ---------------- */
+float readDCVoltage(int channel) {
+  int raw = readMuxADC(channel);
+
+  if (raw < 5) return 0.0;
+
+  float vOut = (raw * REF_VOLTAGE) / ADC_RESOLUTION;
+  float vIn = vOut * DIVIDER_FACTOR;
+
+  return vIn;
+}
+
+/* ------------- CURRENT SENSOR (ACS712) ---------------- */
+float readACS(int channel) {
+  unsigned long start = millis();
+  float sumSq = 0;
+  int count = 0;
+
+  while (millis() - start < 20) {
+    float adc = readMuxADC(channel);
+    float voltage = adc * (3.3 / 4095.0);
+
+    float current = (voltage - 1.65) / 0.066;  // ACS712 30A
+    sumSq += current * current;
+    count++;
+  }
+
+  return sqrt(sumSq / count);
+}
+
+/* ------------- AC VOLTAGE READERS (ZMPT101B) ---------------- */
+float readCriticalACVoltage() {
+  float voltage = criticalVoltageSensor.getRmsVoltage() * CRITICAL_CALIBRATION;
+
+  // Filter out noise and invalid readings
+  if (voltage < 15.0 || voltage > 300.0) {
+    return 0.0;
+  }
+
+  return voltage;
+}
+
+float readNonCriticalACVoltage() {
+  float voltage = nonCriticalVoltageSensor.getRmsVoltage() * NON_CRITICAL_CALIBRATION;
+
+  // Filter out noise and invalid readings
+  if (voltage < 15.0 || voltage > 300.0) {
+    return 0.0;
+  }
+
+  return voltage;
+}
+
+/* ------------ READ ALL SENSOR VALUES ----------------- */
+void updateAllSensors() {
+  // DC Voltage Sensors via MUX
+  solarVoltage = readDCVoltage(SOLAR_V);
+  windVoltage = readDCVoltage(WIND_V);
+  batteryVoltage = readDCVoltage(BATTERY_V);
+
+  // AC Voltage Sensors via direct GPIO
+  criticalVoltage = readCriticalACVoltage();
+  nonCriticalVoltage = readNonCriticalACVoltage();
+
+  // Current Sensors via MUX
+  solarCurrent = readACS(SOLAR_C);
+  windCurrent = readACS(WIND_C);
+  batteryCurrent = readACS(BATTERY_C);
+  criticalCurrent = readACS(2);     // Channel 2 for critical current
+  nonCriticalCurrent = readACS(3);  // Channel 3 for non-critical current
+}
+
+
+/* ------------------------- SETUP ------------------------- */
+void setup() {
+  Serial.begin(115200);
+
+  // Initialize MUX pins
+  pinMode(MUX_S0, OUTPUT);
+  pinMode(MUX_S1, OUTPUT);
+  pinMode(MUX_S2, OUTPUT);
+  pinMode(MUX_S3, OUTPUT);
+  pinMode(MUX_SIG, INPUT);
+  analogSetPinAttenuation(MUX_SIG, ADC_11db);
+
+  // Initialize ZMPT101B sensors
+  criticalVoltageSensor.setSensitivity(ZMPT_SENSITIVITY);
+  nonCriticalVoltageSensor.setSensitivity(ZMPT_SENSITIVITY);
+
+  // Initialize other pins
+  pinMode(FAULT_PIN, INPUT_PULLUP);
+
+  pinMode(RELAY_SOCKET_1, OUTPUT);
+  pinMode(RELAY_SOCKET_2, OUTPUT);
+  pinMode(RELAY_INVERTER, OUTPUT);
+  pinMode(MOSFET_TRIGGER, OUTPUT);
+
+  pinMode(LED_G1_GREEN, OUTPUT);
+  pinMode(LED_G1_RED, OUTPUT);
+  pinMode(LED_G2_GREEN, OUTPUT);
+  pinMode(LED_G2_RED, OUTPUT);
+
+  // Initialize I2C and LCD
+  Wire.begin(I2C_SDA, I2C_SCL);
+  Wire.setClock(100000);
+  lcd.init();
+  lcd.backlight();
+
+  delay(200);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Microgrid Initializing...");
+}
+
+/* ------------------------- LOOP -------------------------- */
+void loop() {
+  updateAllSensors();
+
+  // ---------------- LCD Display ----------------
+  lcd.clear();
+
+  // Row 1: Wind and Solar
+  lcd.setCursor(0, 0);
+  lcd.print("W:");
+  lcd.print(windVoltage, 1);
+  lcd.print("V S:");
+  lcd.print(solarVoltage, 1);
+  lcd.print("V");
+
+  // Row 2: Battery
+  lcd.setCursor(0, 1);
+  lcd.print("BAT:");
+  lcd.print(batteryVoltage, 1);
+  lcd.print("V");
+
+  // Row 3: Critical AC Load
+  lcd.setCursor(0, 2);
+  lcd.print("CRIT:");
+  if (criticalVoltage > 0) {
+    lcd.print(criticalVoltage, 0);
+    lcd.print("V AC");
+  } else {
+    lcd.print("NO AC");
+  }
+
+  // Row 4: Non-Critical AC Load
+  lcd.setCursor(0, 3);
+  lcd.print("NON:");
+  if (nonCriticalVoltage > 0) {
+    lcd.print(nonCriticalVoltage, 0);
+    lcd.print("V AC");
+  } else {
+    lcd.print("NO AC");
+  }
+
+  // ---------------- Serial Monitor Output ----------------
+  Serial.println("===== Microgrid Sensor Readings =====");
+  Serial.printf("Wind Voltage        : %.2f V DC\n", windVoltage);
+  Serial.printf("Solar Voltage       : %.2f V DC\n", solarVoltage);
+  Serial.printf("Battery Voltage     : %.2f V DC\n", batteryVoltage);
+
+  if (criticalVoltage > 0) {
+    Serial.printf("Critical Load Volt  : %.1f V AC\n", criticalVoltage);
+  } else {
+    Serial.printf("Critical Load Volt  : NO AC SIGNAL\n");
+  }
+
+  if (nonCriticalVoltage > 0) {
+    Serial.printf("Non-Critical Volt   : %.1f V AC\n", nonCriticalVoltage);
+  } else {
+    Serial.printf("Non-Critical Volt   : NO AC SIGNAL\n");
+  }
+
+  Serial.printf("Wind Current        : %.2f A\n", windCurrent);
+  Serial.printf("Solar Current       : %.2f A\n", solarCurrent);
+  Serial.printf("Battery Current     : %.2f A\n", batteryCurrent);
+  Serial.println("=====================================\n");
+
+  delay(1000);
+}
+
+/* ------------- TROUBLESHOOTING HELPERS ---------------- */
+void debugACSensors() {
+  Serial.println("=== AC Sensor Debug ===");
+
+  // Test critical AC sensor
+  Serial.print("Critical AC Pin (36) RAW: ");
+  Serial.println(analogRead(CRITICAL_AC_PIN));
+
+  // Test non-critical AC sensor
+  Serial.print("Non-Critical AC Pin (39) RAW: ");
+  Serial.println(analogRead(NON_CRITICAL_AC_PIN));
+
+  // Test ZMPT readings
+  float crit = criticalVoltageSensor.getRmsVoltage();
+  float nonCrit = nonCriticalVoltageSensor.getRmsVoltage();
+
+  Serial.printf("Critical ZMPT Reading: %.2f V\n", crit);
+  Serial.printf("Non-Critical ZMPT Reading: %.2f V\n", nonCrit);
+  Serial.println("=======================");
+}

@@ -1,0 +1,22 @@
+| Function                                      | ESP32 Pin |
+| --------------------------------------------- | --------- |
+| **MUX S0**                                    | GPIO 21   |
+| **MUX S1**                                    | GPIO 22   |
+| **MUX S2**                                    | GPIO 23   |
+| **MUX S3**                                    | GPIO 19   |
+| **MUX Signal Out → ADC**                      | GPIO 34   |
+| **PC817 Inverter Fault IN**                   | GPIO 25   |
+| **Inverter ON/OFF Relay (R_INV)**             | GPIO 26   |
+| **MOSFET Trigger**                            | GPIO 14   |
+| **4-Channel Relay Module (Socket Switching)** |           |
+| ├─ Relay CH1 (Socket 1)         	            | GPIO 4    |
+| ├─ Relay CH2 (socket 2)     		            | GPIO 5    |
+| **Status LEDs (Common Cathode)**              |           |
+| ├─ Group1 GREEN (inverter)                    | GPIO 27   |
+| ├─ Group1 RED (mains)                         | GPIO 16   |
+| ├─ Group2 GREEN (inverter)                    | GPIO 17   |
+| └─ Group2 RED (mains)                         | GPIO 15   |
+| **I²C LCD**                                   |           |
+| ├─ SDA                                        | GPIO 32   |
+| └─ SCL                                        | GPIO 33   |
+

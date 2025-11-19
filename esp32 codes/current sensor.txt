@@ -1,0 +1,27 @@
+#include <ACS712.h>
+
+// ESP32 correct parameters:
+// Pin, 3.3V operating voltage, 4095 max ADC, 66mV/A for 30A model
+ACS712 sensor(34, 3.3, 4095, 66);
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("ACS712 AC Current Sensor - ESP32");
+  
+  // Calibrate for AC current
+  sensor.autoMidPoint();
+}
+
+void loop() {
+  // For AC current, use mA_AC() instead of mA_DC()
+  float current_mA = sensor.mA_AC(100); // 100 samples for better accuracy
+  
+  // Convert to Amps
+  float current_A = current_mA / 1000.0;
+  
+  Serial.print("AC Current: ");
+  Serial.print(current_A, 3); // 3 decimal places
+  Serial.println(" A");
+  
+  delay(1000);
+}

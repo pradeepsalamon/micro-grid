@@ -1,20 +1,23 @@
-const int sensorPin = 34;
+#include <Wire.h>
+#include <ZMPT101B.h>
+
+#define SENSITIVITY 500.0f       // Adjust this value to calibrate sensitivity
+#define CALIBRATION_FACTOR 1.60  // Calibration factor to correct the reading (230 / 155)
+
+ZMPT101B voltageSensor(36, 50.0);
 
 void setup() {
   Serial.begin(115200);
-  analogReadResolution(12);
+  voltageSensor.setSensitivity(SENSITIVITY);
+}
+
+void sensor() {
+  float voltage = voltageSensor.getRmsVoltage() * CALIBRATION_FACTOR;  // Apply calibration factor
+  Serial.print("Voltage: ");
+  Serial.println(voltage);
 }
 
 void loop() {
-  long sum = 0;
-  for(int i = 0; i < 1000; i++) {
-    int raw = analogRead(sensorPin);
-    float v = (raw * 3.3) / 4095.0 - 1.56;
-    sum += (v * 1000) * (v * 1000);
-    delay(1);
-  }
-  
-  float voltage = (sqrt((float)sum / 1000) / 1000) / 0.001128;
-  Serial.println(voltage, 1);
-  delay(1000);
+  sensor();
+  delay(200);
 }
