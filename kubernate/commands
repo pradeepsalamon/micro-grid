@@ -1,0 +1,7 @@
+shows pods
+kubectl get pods -n microgrid
+
+nginx post forward
+kubectl port-forward --address 0.0.0.0 -n ingress-nginx service/ingress-nginx-controller 8080:80
+
+fastAPI logs

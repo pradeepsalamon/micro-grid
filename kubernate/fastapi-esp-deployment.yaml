@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastapi-esp
+  namespace: microgrid
+  labels:
+    app: fastapi-esp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fastapi-esp
+  template:
+    metadata:
+      labels:
+        app: fastapi-esp
+    spec:
+      containers:
+        - name: fastapi-esp
+          image: fastapi-esp:latest     # your locally built image
+          imagePullPolicy: Never        # IMPORTANT for minikube
+          ports:
+            - containerPort: 8000
+

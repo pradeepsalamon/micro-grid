@@ -1,0 +1,605 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <ZMPT101B.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <LiquidCrystal_I2C.h>
+#include <ArduinoJson.h>
+
+LiquidCrystal_I2C lcd(0x27, 20, 4);
+
+/* ================= WIFI CONFIG ================= */
+const char* ssid = "pradeep lap";
+const char* password = "9626119896";
+
+/* ================= SERVER CONFIG ================= */
+const char* TELEMETRY_URL = "http://172.16.1.137:8000/api/telemetry";
+
+/* ================= TIMING ================= */
+unsigned long lastSendMillis = 0;
+const unsigned long SEND_INTERVAL = 1000;
+
+/* ================= WIFI RETRY ================= */
+unsigned long lastWiFiRetry = 0;
+const unsigned long WIFI_RETRY_INTERVAL = 5000;
+
+// ---------------- MUX (CD74HC4067) ----------------
+#define MUX_S0 21
+#define MUX_S1 22
+#define MUX_S2 23
+#define MUX_S3 19
+#define MUX_SIG 34
+
+// MUX Channels
+#define SOLAR_V 2
+#define SOLAR_C 3  // DC current
+#define WIND_V 4
+#define WIND_C 5  // DC current
+#define BATTERY_V 6
+#define BATTERY_C 7  // DC current
+#define CRITICAL_C 8
+#define NON_CRITICAL_C 9
+
+// ---------------- AC VOLTAGE ZMPT PINS ----------------
+#define CRITICAL_AC_PIN 36
+#define NON_CRITICAL_AC_PIN 39
+
+ZMPT101B criticalVoltageSensor(CRITICAL_AC_PIN, 50.0);
+ZMPT101B nonCriticalVoltageSensor(NON_CRITICAL_AC_PIN, 50.0);
+
+// ---- ZMPT Calibration ----
+#define ZMPT_SENSITIVITY 500.0f
+#define GRID_CALIBRATION 2.1
+#define INVERTER_CALIBRATION 2.5
+
+// ---------------- DC Divider / ADC ----------------
+#define REF_VOLTAGE 3.3f
+#define ADC_RESOLUTION 4095.0f
+#define DIVIDER_FACTOR 5.11f
+
+// ---------------- ACS712 Settings ----------------
+const float ACS_SENSITIVITY = 0.066f;  // V/A  (30A)
+const float ACS_MIN_DETECT_A = 0.031f;
+
+// *** FIXED ZERO FOR ALL DC CURRENT SENSORS ***
+float ACS_ZERO_COMMON = 2.30f;  // will be replaced during auto-calibration
+
+// ---------------- RELAYS + MOSFET + LED ----------------
+
+#define RELAY_CRITICAL_SOCKET 16
+#define RELAY_NON_CRITICAL_SOCKET 17
+#define RELAY_INVERTER 26
+// #define MOSFET_TRIGGER 14
+
+// LEDs
+#define LED_G1_GREEN 27
+#define LED_G1_RED 5
+#define LED_G2_GREEN 32
+#define LED_G2_RED 33
+
+// I2C
+#define I2C_SDA 4
+#define I2C_SCL 15
+
+// ---------------- Variables ----------------
+float solarVoltage = 0, windVoltage = 0, batteryVoltage = 0, batterySoc = 0.0;
+float solarCurrentDC = 0, windCurrentDC = 0, batteryCurrentDC = 0;
+float solarPower = 0, windPower = 0, batteryPower = 0;
+float criticalCurrentAC = 0, nonCriticalCurrentAC = 0;
+float criticalVoltageAC = 0, nonCriticalVoltageAC = 0;
+int criticalPower = 0, criticalPowerAverage = 0, nonCriticalPower = 0, nonCriticalPowerAverage = 0, avgCount = 0;
+int totalPower = 0, gridPower = 0, inverterPower = 0;
+int faultCount = 0;
+
+
+bool criticalOnInverter = false;
+bool nonCriticalOnInverter = false;
+bool usingInverter = false;
+
+int powersOfCritical[5];
+int powersOfNonCritical[5];
+
+
+// ---------------- MUX Logic ----------------
+void muxSelect(uint8_t channel) {
+  digitalWrite(MUX_S0, channel & 1);
+  digitalWrite(MUX_S1, (channel >> 1) & 1);
+  digitalWrite(MUX_S2, (channel >> 2) & 1);
+  digitalWrite(MUX_S3, (channel >> 3) & 1);
+  delayMicroseconds(50);
+}
+
+int readMuxADC(uint8_t channel) {
+  muxSelect(channel);
+  delayMicroseconds(600);
+  analogRead(MUX_SIG);
+  long sum = 0;
+  for (int i = 0; i < 30; i++) {
+    sum += analogRead(MUX_SIG);
+    delayMicroseconds(150);
+  }
+  return sum / 30;
+}
+
+float calibrateACSZeroCommon() {
+  const int samples = 500;
+  long sum = 0;
+
+  // Use ONE channel (batteryC is best because most stable)
+  for (int i = 0; i < samples; i++) {
+    int raw = readMuxADC(WIND_C);
+    sum += raw;
+    delayMicroseconds(200);
+  }
+
+  float adcV = (sum / (float)samples) * (REF_VOLTAGE / ADC_RESOLUTION);
+  float acsV = adcV * (5.0f / REF_VOLTAGE);  // reconstruct ACS OUT 0..5V
+
+  return acsV;
+}
+
+// ---------------- DC Voltage ----------------
+float readDCVoltageMux(int channel) {
+  int raw = readMuxADC(channel);
+  if (raw < 5) return 0;
+  float vOut = (raw * REF_VOLTAGE) / ADC_RESOLUTION;
+  return (vOut * DIVIDER_FACTOR * 0.949f) + 0.64f;
+}
+
+// ---------------- AC RMS current ----------------
+float readACSMux_RMSamps(int channel) {
+  // zero offset (quick)
+  long zsum = 0;
+  for (int i = 0; i < 15; i++) {
+    zsum += readMuxADC(channel);
+  }
+  float zeroVadc = (zsum / 15.0f) * (REF_VOLTAGE / ADC_RESOLUTION);
+
+  // RMS window 20ms
+  unsigned long start = millis();
+  double sumSq = 0;
+  int count = 0;
+
+  while (millis() - start < 20) {
+    float v = readMuxADC(channel) * (REF_VOLTAGE / ADC_RESOLUTION);
+    float centered = v - zeroVadc;
+    sumSq += centered * centered;
+    count++;
+  }
+
+  if (count == 0) return 0;
+
+  float rmsVadc = sqrt(sumSq / count);
+  float rmsVacs = rmsVadc * (5.0 / REF_VOLTAGE);
+  float amps = rmsVacs / ACS_SENSITIVITY;
+  return (amps < ACS_MIN_DETECT_A) ? 0 : amps;
+}
+
+// ---------------- DC CURRENT (NO CALIBRATION) ----------------
+float readDCCurrentMux(int channel) {
+  long sum = 0;
+  for (int i = 0; i < 20; i++) sum += readMuxADC(channel);
+
+  float adcV = (sum / 20.0f) * (REF_VOLTAGE / ADC_RESOLUTION);
+  float acsV = adcV * (5.0f / REF_VOLTAGE);
+
+  float amps = (acsV - ACS_ZERO_COMMON) / ACS_SENSITIVITY;
+  if (fabs(amps) < ACS_MIN_DETECT_A) return 0;
+  return amps;
+}
+
+
+// ---------------- AC Voltage ----------------
+float readAcVoltage(bool isCritical) {
+  float cal = isCritical
+                ? (criticalOnInverter ? INVERTER_CALIBRATION : GRID_CALIBRATION)
+                : (nonCriticalOnInverter ? INVERTER_CALIBRATION : GRID_CALIBRATION);
+
+  float rms = isCritical ? criticalVoltageSensor.getRmsVoltage() : nonCriticalVoltageSensor.getRmsVoltage();
+
+  float v = rms * cal;
+  return (v < 20) ? 0 : v;
+}
+
+// power (watts) calculation
+float calculatePower(float voltage, float current) {
+  if (voltage <= 0 || current <= 0) return 0.0;
+  return voltage * current;
+}
+
+float calculateBatterySOC() {
+  float minV = 12.20;
+  float maxV = 13.60;  // Full charge
+
+  if (batteryVoltage <= minV) return 0.0;
+  if (batteryVoltage >= maxV) return 100.0;
+
+  float soc = ((batteryVoltage - minV) / (maxV - minV)) * 100.0;
+
+  if (soc > batterySoc + 2.0 || soc < batterySoc - 2.0) {
+    return soc;
+  }
+
+  return batterySoc;
+}
+
+// changing loads to inverter
+void changeToInverter(bool criticalLoad, bool nonCriticalLoad) {
+  usingInverter = true;
+  // digitalWrite(MOSFET_TRIGGER, HIGH);
+  // delay(100);
+  digitalWrite(RELAY_INVERTER, LOW);
+  delay(3000);
+
+  if (criticalLoad) {
+    digitalWrite(RELAY_CRITICAL_SOCKET, LOW);
+    criticalOnInverter = true;
+    digitalWrite(LED_G1_RED, LOW);
+    digitalWrite(LED_G1_GREEN, HIGH);
+  }
+
+  if (nonCriticalLoad) {
+    digitalWrite(RELAY_NON_CRITICAL_SOCKET, LOW);
+    nonCriticalOnInverter = true;
+    digitalWrite(LED_G2_RED, LOW);
+    digitalWrite(LED_G2_GREEN, HIGH);
+  }
+
+
+  Serial.print("INVERTER MODE | Critical=");
+  Serial.print(criticalOnInverter ? "INV" : "GRID");
+  Serial.print(" | NonCritical=");
+  Serial.println(nonCriticalOnInverter ? "INV" : "GRID");
+}
+
+
+// changing loads to main grid
+void changeToGrid(bool criticalToGrid, bool nonCriticalToGrid) {
+
+  if (criticalToGrid) {
+    digitalWrite(RELAY_CRITICAL_SOCKET, HIGH);
+    criticalOnInverter = false;
+    digitalWrite(LED_G1_GREEN, LOW);
+    digitalWrite(LED_G1_RED, HIGH);
+  }
+
+  if (nonCriticalToGrid) {
+    digitalWrite(RELAY_NON_CRITICAL_SOCKET, HIGH);
+    nonCriticalOnInverter = false;
+    digitalWrite(LED_G2_GREEN, LOW);
+    digitalWrite(LED_G2_RED, HIGH);
+  }
+
+  // TURN OFF inverter ONLY if both loads are now on GRID
+  if (!criticalOnInverter && !nonCriticalOnInverter) {
+    usingInverter = false;
+    digitalWrite(RELAY_INVERTER, HIGH);
+    // delay(100);
+    // digitalWrite(MOSFET_TRIGGER, LOW);
+    Serial.println("Inverter OFF — all loads on GRID");
+  }
+
+  Serial.print("GRID MODE | Critical=");
+  Serial.print(criticalOnInverter ? "INV" : "GRID");
+  Serial.print(" | NonCritical=");
+  Serial.println(nonCriticalOnInverter ? "INV" : "GRID");
+}
+
+bool isInverterFault() {
+  if (criticalOnInverter && criticalVoltageAC >= 100) {
+    return false;
+  } else if (nonCriticalOnInverter && nonCriticalVoltageAC >= 100) {
+    return false;
+  }
+  return true;
+}
+
+int calculateAveragePower(int powers[]) {
+  int sum = 0;
+  for (int i = 0; i < 5; i++) sum += powers[i];
+  return sum / 5;
+}
+
+void autoSwitchToInverter() {
+  powersOfCritical[avgCount] = criticalPower;
+  powersOfNonCritical[avgCount] = nonCriticalPower;
+  avgCount++;
+
+  if (avgCount == 5) {
+    avgCount = 0;
+    criticalPowerAverage = calculateAveragePower(powersOfCritical);
+    nonCriticalPowerAverage = calculateAveragePower(powersOfNonCritical);
+    if (!criticalOnInverter && criticalPower > 10 && criticalPower < 190) {
+      changeToInverter(true, false);
+    }
+    if (!nonCriticalOnInverter && nonCriticalPower > 10 && nonCriticalPower < 190) {
+      changeToInverter(false, true);
+    }
+  }
+}
+
+
+// ---------------- READ ALL ----------------
+void updateAllSensors() {
+  criticalVoltageAC = readAcVoltage(true);
+  nonCriticalVoltageAC = readAcVoltage(false);
+
+  solarVoltage = readDCVoltageMux(SOLAR_V);
+  windVoltage = readDCVoltageMux(WIND_V);
+  batteryVoltage = readDCVoltageMux(BATTERY_V);
+
+  solarCurrentDC = readDCCurrentMux(SOLAR_C);
+  windCurrentDC = readDCCurrentMux(WIND_C);
+  batteryCurrentDC = readDCCurrentMux(BATTERY_C);
+
+  criticalCurrentAC = readACSMux_RMSamps(CRITICAL_C);
+  nonCriticalCurrentAC = readACSMux_RMSamps(NON_CRITICAL_C);
+
+  solarPower = calculatePower(solarVoltage, solarCurrentDC);
+  windPower = calculatePower(windVoltage, windCurrentDC);
+  batteryPower = calculatePower(batteryVoltage, batteryCurrentDC);
+  batterySoc = calculateBatterySOC();
+
+  criticalPower = calculatePower(criticalVoltageAC, criticalCurrentAC);
+  nonCriticalPower = calculatePower(nonCriticalVoltageAC, nonCriticalCurrentAC);
+  totalPower = criticalPower + nonCriticalPower;
+
+  gridPower = 0;
+  inverterPower = 0;
+
+  if (usingInverter) {
+    if (criticalOnInverter) inverterPower += criticalPower;
+    else gridPower += criticalPower;
+
+    if (nonCriticalOnInverter) inverterPower += nonCriticalPower;
+    else gridPower += nonCriticalPower;
+
+  } else {
+    gridPower = totalPower;
+  }
+}
+
+
+/* ================= WIFI SAFE START ================= */
+void safeWiFiStart() {
+  WiFi.mode(WIFI_OFF);
+  delay(300);
+  WiFi.mode(WIFI_STA);
+  delay(50);
+  WiFi.begin(ssid, password);
+
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(false);
+
+  Serial.println("WiFi starting...");
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("WiFi Connecting");
+}
+
+/* ================= WIFI AUTO RECONNECT ================= */
+void checkWiFi() {
+  if (WiFi.status() == WL_CONNECTED) return;
+
+  if (millis() - lastWiFiRetry < WIFI_RETRY_INTERVAL) return;
+
+  lastWiFiRetry = millis();
+
+  Serial.println("WiFi lost. Reconnecting...");
+  lcd.setCursor(0, 3);
+  lcd.print("WiFi Reconnecting");
+
+  WiFi.disconnect();
+  delay(100);
+  WiFi.begin(ssid, password);
+}
+
+void parseAndApplyCommand(String json) {
+
+  StaticJsonDocument<256> doc;
+  DeserializationError error = deserializeJson(doc, json);
+  if (error) {
+    Serial.println("JSON parse failed");
+    return;
+  }
+
+  if (doc["command"].isNull()) {
+    return;
+  }
+
+  String data = doc["command"]["action"].as<String>();
+
+  int p1 = data.indexOf(',');
+  int p2 = data.indexOf(',', p1 + 1);
+  int p3 = data.indexOf(',', p2 + 1);
+
+  float voltage = data.substring(0, p1).toInt();
+  float current = data.substring(p1 + 1, p2).toFloat();
+  float power = data.substring(p2 + 1, p3).toFloat();
+  int battery = data.substring(p3 + 1).toInt();
+  JsonArray sockets = doc["command"]["sockets"].as<JsonArray>();
+
+  lcd.setCursor(0, 3);
+  lcd.print("Cmd: ");
+  lcd.print(data);
+
+  for (JsonVariant s : sockets) {
+    String socket = s.as<String>();
+  }
+}
+
+
+
+/* ================= SEND TELEMETRY ================= */
+void sendTelemetry() {
+
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  StaticJsonDocument<256> data;
+
+  data["sources"]["solar_power"] = solarPower;
+  data["sources"]["wind_power"] = windPower;
+  data["sources"]["battery_power"] = batteryPower;
+  data["sources"]["battery_soc"] = batterySoc;
+
+  data["loads"]["critical"] = criticalPower;
+  data["loads"]["non_critical"] = nonCriticalPower;
+  data["loads"]["grid"] = gridPower;
+  data["loads"]["inverter"] = inverterPower;
+  data["loads"]["total"] = totalPower;
+
+  data["info"]["critical_on_inverter"] = criticalOnInverter;
+  data["info"]["non_critical_on_inverter"] = nonCriticalOnInverter;
+  data["info"]["using_inverter"] = usingInverter;
+
+  String payload;
+  serializeJson(data, payload);
+
+  HTTPClient http;
+  http.begin(TELEMETRY_URL);
+  http.addHeader("Content-Type", "application/json; charset=utf-8");
+  http.setTimeout(3000);
+
+  int httpCode = http.POST(payload);
+
+  lcd.setCursor(0, 2);
+  if (httpCode == 200) {
+    lcd.print("Telemetry Sent   ");
+    String response = http.getString();
+    Serial.println(response);
+
+    if (response.indexOf("\"command\":null") == -1) {
+      parseAndApplyCommand(response);
+    }
+  } else {
+    lcd.print("Send Failed ");
+    lcd.print(httpCode);
+  }
+
+  http.end();
+}
+
+
+// ---------------- SETUP ----------------
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(RELAY_CRITICAL_SOCKET, OUTPUT);
+  pinMode(RELAY_NON_CRITICAL_SOCKET, OUTPUT);
+  pinMode(RELAY_INVERTER, OUTPUT);
+  // pinMode(MOSFET_TRIGGER, OUTPUT);
+
+  pinMode(LED_G1_GREEN, OUTPUT);
+  pinMode(LED_G1_RED, OUTPUT);
+  pinMode(LED_G2_GREEN, OUTPUT);
+  pinMode(LED_G2_RED, OUTPUT);
+
+  digitalWrite(RELAY_CRITICAL_SOCKET, HIGH);
+  digitalWrite(RELAY_NON_CRITICAL_SOCKET, HIGH);
+  digitalWrite(RELAY_INVERTER, HIGH);
+  // digitalWrite(MOSFET_TRIGGER, LOW);
+
+  digitalWrite(LED_G1_RED, HIGH);
+  digitalWrite(LED_G2_RED, HIGH);
+
+  pinMode(MUX_S0, OUTPUT);
+  pinMode(MUX_S1, OUTPUT);
+  pinMode(MUX_S2, OUTPUT);
+  pinMode(MUX_S3, OUTPUT);
+  pinMode(MUX_SIG, INPUT);
+
+  analogSetPinAttenuation(MUX_SIG, ADC_11db);
+  analogReadResolution(12);
+
+  Wire.begin(I2C_SDA, I2C_SCL);
+  lcd.init();
+  lcd.backlight();
+
+  lcd.setCursor(0, 0);
+  lcd.print("Microgrid Ready");
+  Serial.println("Calibrating common ACS zero... remove all DC loads!");
+
+  ACS_ZERO_COMMON = calibrateACSZeroCommon();
+
+  Serial.print("ACS Zero = ");
+  Serial.print(ACS_ZERO_COMMON, 4);
+  Serial.println(" V");
+  safeWiFiStart();
+}
+
+// ---------------- LOOP ----------------
+void loop() {
+
+  checkWiFi();
+
+  unsigned long start = millis();
+
+  // --- Read all sensors ---
+  updateAllSensors();
+
+  // --- LCD update ---
+  lcd.clear();
+
+  lcd.setCursor(0, 0);
+  lcd.printf("CR:%3.0fV %.2fA %4dW",
+             criticalVoltageAC, criticalCurrentAC, criticalPower);
+
+  lcd.setCursor(0, 1);
+  lcd.printf("NC:%3.0fV %.2fA %4dW",
+             nonCriticalVoltageAC, nonCriticalCurrentAC, nonCriticalPower);
+
+  lcd.setCursor(0, 2);
+  lcd.printf("S: %.1fV %.2fA %3.0fW",
+             solarVoltage, solarCurrentDC, solarPower);
+
+  lcd.setCursor(0, 3);
+  lcd.printf("W: %.1fV %.2fA %3.0fW",
+             windVoltage, windCurrentDC, windPower);
+
+  if (usingInverter) {
+    if (isInverterFault()) faultCount++;
+    if (faultCount > 3) {
+      changeToGrid(true, true);
+      faultCount = 0;
+      Serial.println("inverter fault detected");
+    }
+  }
+  // autoSwitchToInverter();
+
+  // --- Keep exactly 1-second cycle ---
+  while (millis() - start < 1000) {
+    delay(1);  // prevent watchdog reset
+  }
+
+  // Serial
+  Serial.println("===== SENSOR READINGS =====");
+  Serial.println("cv:" + String(criticalVoltageAC) + " " + String(criticalCurrentAC) + String(criticalPower) + "w");
+  Serial.println("ncv:" + String(nonCriticalVoltageAC) + " " + String(nonCriticalCurrentAC) + String(nonCriticalPower) + "w");
+  Serial.printf("Solar: %.2f V | %.3f A\n", solarVoltage, solarCurrentDC);
+  Serial.printf("Wind : %.2f V | %.3f A\n", windVoltage, windCurrentDC);
+  Serial.printf("Batt : %.2f V | %.3f A\n", batteryVoltage, batteryCurrentDC);
+  Serial.println("inverter P:" + String(inverterPower));
+  Serial.println("grid P:" + String(gridPower));
+  Serial.println("total P:" + String(totalPower));
+  Serial.println("============================\n");
+
+  if (WiFi.status() == WL_CONNECTED) {
+    sendTelemetry();
+  }
+
+  if (Serial.available()) {
+    char m = Serial.read();
+    if (m == 'i') {
+      changeToInverter(true, false);
+    }
+    if (m == 'm') {
+      changeToGrid(true, false);
+    }
+    if (m == 'a') {
+      changeToInverter(false, true);
+    }
+    if (m == 'b') {
+      changeToGrid(false, true);
+    }
+  }
+}

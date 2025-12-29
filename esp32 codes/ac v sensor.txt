@@ -1,23 +1,37 @@
 #include <Wire.h>
 #include <ZMPT101B.h>
 
-#define SENSITIVITY 500.0f       // Adjust this value to calibrate sensitivity
-#define CALIBRATION_FACTOR 1.60  // Calibration factor to correct the reading (230 / 155)
+#define SENSITIVITY 500.0f
 
-ZMPT101B voltageSensor(36, 50.0);
+ZMPT101B criticalVoltageSensor(36, 50.0);
+ZMPT101B nonCriticalVoltageSensor(39, 50.0);
+
+// Dual calibration - USE THESE VALUES
+#define GRID_CALIBRATION 1.61
+#define INVERTER_CALIBRATION 1.85  // Change this until you get 250V
+
+bool usingInverter = false; // Set to false for grid power
 
 void setup() {
   Serial.begin(115200);
-  voltageSensor.setSensitivity(SENSITIVITY);
+  criticalVoltageSensor.setSensitivity(SENSITIVITY);
+  nonCriticalVoltageSensor.setSensitivity(SENSITIVITY);
 }
 
-void sensor() {
-  float voltage = voltageSensor.getRmsVoltage() * CALIBRATION_FACTOR;  // Apply calibration factor
-  Serial.print("Voltage: ");
-  Serial.println(voltage);
+void readAcVoltage() {
+  float calibration = usingInverter ? INVERTER_CALIBRATION : GRID_CALIBRATION;
+  
+  float criticalVoltage = criticalVoltageSensor.getRmsVoltage() * calibration;
+  float nonCriticalVoltage = nonCriticalVoltageSensor.getRmsVoltage() * calibration;
+  
+  Serial.print("Critical: ");
+  Serial.print(criticalVoltage);
+  Serial.print("V | Non-Critical: ");
+  Serial.print(nonCriticalVoltage);
+  Serial.println("V");
 }
 
 void loop() {
-  sensor();
-  delay(200);
+  readAcVoltage();
+  delay(1000);
 }

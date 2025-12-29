@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: fastapi-esp-service
+  namespace: microgrid
+spec:
+  selector:
+    app: fastapi-esp
+  ports:
+    - port: 8000
+      targetPort: 8000
+  type: ClusterIP

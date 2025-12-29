@@ -1,22 +1,88 @@
-| Function                                      | ESP32 Pin |
-| --------------------------------------------- | --------- |
-| **MUX S0**                                    | GPIO 21   |
-| **MUX S1**                                    | GPIO 22   |
-| **MUX S2**                                    | GPIO 23   |
-| **MUX S3**                                    | GPIO 19   |
-| **MUX Signal Out → ADC**                      | GPIO 34   |
-| **PC817 Inverter Fault IN**                   | GPIO 25   |
-| **Inverter ON/OFF Relay (R_INV)**             | GPIO 26   |
-| **MOSFET Trigger**                            | GPIO 14   |
-| **4-Channel Relay Module (Socket Switching)** |           |
-| ├─ Relay CH1 (Socket 1)         	            | GPIO 4    |
-| ├─ Relay CH2 (socket 2)     		            | GPIO 5    |
-| **Status LEDs (Common Cathode)**              |           |
-| ├─ Group1 GREEN (inverter)                    | GPIO 27   |
-| ├─ Group1 RED (mains)                         | GPIO 16   |
-| ├─ Group2 GREEN (inverter)                    | GPIO 17   |
-| └─ Group2 RED (mains)                         | GPIO 15   |
-| **I²C LCD**                                   |           |
-| ├─ SDA                                        | GPIO 32   |
-| └─ SCL                                        | GPIO 33   |
+1. CD74HC4067 – 8-Channel MUX (0–7 used)
 
+| MUX Function               | ESP32 Pin   |
+| -------------------------- | ----------- |
+| **S0**                     | GPIO **21** |
+| **S1**                     | GPIO **22** |
+| **S2**                     | GPIO **23** |
+| **S3**                     | GPIO **19** |
+| **SIG (Analog Out → ADC)** | GPIO **34** |
+
+
+2. MUX Channel Assignment (0–7)
+
+| MUX Channel | Function       | Sensor Type           |
+| ----------- | -------------- | --------------------- |
+| **0**       | SOLAR_V        | DC Voltage Sensor     |
+| **1**       | SOLAR_C        | ACS712 Current Sensor |
+| **2**       | WIND_V         | DC Voltage Sensor     |
+| **3**       | WIND_C         | ACS712 Current Sensor |
+| **4**       | BATTERY_V      | DC Voltage Sensor     |
+| **5**       | BATTERY_C      | ACS712 Current Sensor |
+| **6**       | CRITICAL_C     | ACS712 Current Sensor |
+| **7**       | NON_CRITICAL_C | ACS712 Current Sensor |
+
+
+3. Direct AC Voltage (ZMPT101B − NO MUX)
+
+| AC Sensor             | ESP32 ADC Pin    |
+| --------------------- | ---------------- |
+| **Critical ZMPT**     | GPIO **36 (VP)** |
+| **Non-Critical ZMPT** | GPIO **39 (VN)** |
+
+
+4. DC Voltage Divider Sensors (via MUX)
+
+| Source             | MUX Channel | Notes               |
+| ------------------ | ----------- | ------------------- |
+| Solar DC Voltage   | 0           | Uses DIVIDER_FACTOR |
+| Wind DC Voltage    | 2           | Uses DIVIDER_FACTOR |
+| Battery DC Voltage | 4           | Uses DIVIDER_FACTOR |
+
+
+5. ACS712 Current Sensors (via MUX)
+
+| Load Type                    | MUX Channel |
+| ---------------------------- | ----------- |
+| Solar Current                | 1           |
+| Wind Current                 | 3           |
+| Battery Current              | 5           |
+| Critical AC Load Current     | 6           |
+| Non-Critical AC Load Current | 7           |
+
+
+6. Fault, Relays, MOSFET
+
+| Purpose            | ESP32 Pin   |
+| ------------------ | ----------- |
+| **PC817 Fault IN** | GPIO **25** |
+| **Relay Socket-1** | GPIO **4**  |
+| **Relay Socket-2** | GPIO **5**  |
+| **Inverter Relay** | GPIO **26** |
+| **MOSFET Trigger** | GPIO **14** |
+
+
+7. LED Indicators
+
+| LED              | ESP32 Pin   |
+| ---------------- | ----------- |
+| **Group1 GREEN** | GPIO **27** |
+| **Group1 RED**   | GPIO **16** |
+| **Group2 GREEN** | GPIO **17** |
+| **Group2 RED**   | GPIO **15** |
+
+
+8. LCD I²C Pins
+
+| LCD Signal | ESP32 Pin   |
+| ---------- | ----------- |
+| **SDA**    | GPIO **32** |
+| **SCL**    | GPIO **33** |
+
+
+9. Reserved ESP32 Pins (Not Used)
+
+| Pin         | Status        |
+| ----------- | ------------- |
+| **EN**      | Boot Enable   |
+| **VP / VN** | Used for ZMPT |
