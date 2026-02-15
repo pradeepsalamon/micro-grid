@@ -1,7 +1,14 @@
 shows pods
 kubectl get pods -n microgrid
 
-nginx post forward
-kubectl port-forward --address 0.0.0.0 -n ingress-nginx service/ingress-nginx-controller 8080:80
-
 fastAPI logs
+
+share external -> http://192.168.1.44:8000/
+kubectl port-forward --address 0.0.0.0 svc/fastapi-esp-service 8000:8000 -n microgrid
+
+ingress-services
+kubectl get ingress -n microgrid
+
+delete service
+kubectl delete ingress name -n microgrid
+
