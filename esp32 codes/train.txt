@@ -1,0 +1,369 @@
+
+
+# 🚀 MASTER SYSTEM SPECIFICATION
+
+# AI-Powered Predictive Microgrid Energy Management Agent
+
+---
+
+# 1️⃣ SYSTEM CONTEXT & SCENARIO
+
+Design a Reinforcement Learning (RL) based Energy Management System (EMS) for a small-scale hybrid microgrid operating under realistic physical and operational constraints.
+
+---
+
+## 🔋 Hardware Configuration
+
+The microgrid consists of:
+
+* **Solar Panel**: 100W (12–22V DC)
+* **Wind Turbine (Demo)**: 0–5W (auxiliary generation)
+* **Battery**: 12V 15Ah LiFePO4 (≈180Wh usable capacity)
+* **Charge Controller**: PWM (solar/wind charge battery only)
+* **Inverter**: 200W AC inverter (draws power only from battery)
+* **Grid Connection**: Utility grid (subject to outages)
+* **Two AC Load Outputs**:
+
+  * Critical Load
+  * Non-Critical Load
+
+---
+
+## ⚙ Energy Flow Assumptions
+
+* Solar and wind **charge battery only**.
+* Inverter always draws from battery.
+* Solar does NOT directly power loads.
+* Grid and inverter cannot supply same load simultaneously.
+* Control decision interval: **1 minute**
+* Episode duration: **6 hours (360 steps)**
+
+---
+
+# 2️⃣ CONTROL OBJECTIVE
+
+At every 1-minute timestep, the RL agent must decide:
+
+```
+Which energy source supplies:
+  - Critical Load
+  - Non-Critical Load
+```
+
+Allowed sources:
+
+* Grid
+* Inverter (battery)
+
+---
+
+# 3️⃣ STATE SPACE (Observation Space)
+
+The agent receives a **normalized continuous state vector** containing real-time measurements and short-term forecasts.
+
+---
+
+## 🟢 Real-Time Sensor Inputs
+
+| Feature              | Description                   | Normalization |
+| -------------------- | ----------------------------- | ------------- |
+| solar_now            | Current solar generation (W)  | /100          |
+| wind_now             | Current wind generation (W)   | /5            |
+| critical_load_now    | Critical load demand (W)      | /250          |
+| noncritical_load_now | Non-critical load demand (W)  | /250          |
+| soc                  | Battery state of charge (0–1) | raw           |
+| grid_available       | Grid availability (0 or 1)    | raw           |
+
+---
+
+## 🟡 Context Inputs
+
+| Feature              | Description                     |
+| -------------------- | ------------------------------- |
+| time_of_day_norm     | Time normalized 0–1             |
+| previous_action_norm | Previous action ID / max_action |
+| episode_progress     | Step / total_steps              |
+
+---
+
+## 🔵 Forecast Inputs (Short-Term Predictive Intelligence)
+
+| Feature                    | Description                                   |
+| -------------------------- | --------------------------------------------- |
+| solar_forecast_30          | Solar forecast next 30 minutes                |
+| load_forecast_30           | Load forecast next 30 minutes                 |
+| outage_probability_30      | Probability of grid outage next 30 min        |
+| outage_duration_prediction | Expected outage duration (minutes normalized) |
+
+Forecasts enable anticipatory control.
+
+---
+
+# 4️⃣ ACTION SPACE
+
+Discrete action space:
+
+```
+0 → (grid, grid)
+1 → (grid, inverter)
+2 → (inverter, grid)
+3 → (inverter, inverter)
+```
+
+Each action represents:
+
+```
+(Critical Source, Non-Critical Source)
+```
+
+Invalid combinations must be masked.
+
+---
+
+# 5️⃣ PHYSICAL CONSTRAINTS
+
+The agent must operate under realistic electrical constraints:
+
+---
+
+### ⚠ Load Limit Constraint
+
+If:
+
+```
+critical_load > 200W OR noncritical_load > 200W
+```
+
+Then:
+
+→ Must use grid
+
+---
+
+### 🔌 Grid Constraint
+
+If:
+
+```
+grid_available == 0
+```
+
+Then:
+
+→ Grid cannot be selected
+
+---
+
+### 🔋 Battery Protection Constraint
+
+If:
+
+```
+SOC < 20%
+```
+
+Then:
+
+→ Non-critical cannot use inverter
+→ Critical may use inverter only if grid unavailable
+
+---
+
+### ⚡ Energy Sufficiency Constraint (Outage-Aware)
+
+If outage predicted:
+
+```
+Required energy = load_forecast_30 × (predicted_duration / 60)
+Available energy = SOC × battery_capacity
+```
+
+If:
+
+```
+Available < Required
+```
+
+→ Preserve battery
+→ Prefer grid
+
+---
+
+# 6️⃣ OPTIMIZATION OBJECTIVES (PRIORITIZED)
+
+The RL agent must balance multiple competing objectives.
+
+---
+
+## 1️⃣ Critical Load Reliability (Highest Priority)
+
+* Critical must never be off.
+* Must be powered during outage if battery sufficient.
+* Large negative reward for critical failure.
+
+---
+
+## 2️⃣ Battery Health & Protection
+
+* Avoid SOC < 20%.
+* Penalize deep discharge.
+* Preserve battery during high outage risk.
+
+---
+
+## 3️⃣ Renewable Maximization
+
+* Prefer inverter usage when:
+
+  * SOC sufficient
+  * Solar strong
+  * Forecast positive
+* Maximize renewable energy ratio:
+
+```
+Renewable Usage Ratio = inverter_energy / total_energy
+```
+
+---
+
+## 4️⃣ Grid Usage Reduction
+
+* Minimize grid energy consumption.
+* But allow grid when:
+
+  * High predicted outage duration
+  * Load spike
+  * Battery insufficient
+
+---
+
+## 5️⃣ Outage Preparation
+
+If:
+
+* Outage probability high
+* Predicted outage duration high
+
+Then:
+
+* Charge battery
+* Avoid unnecessary inverter discharge
+
+---
+
+## 6️⃣ Switching Minimization
+
+* Penalize source switching.
+* Avoid oscillatory behavior.
+* Encourage stable decisions.
+
+---
+
+# 7️⃣ REWARD FUNCTION DESIGN
+
+Reward should combine:
+
+### Positive Components
+
+* Renewable usage bonus
+* Proper outage preparation bonus
+* Maintaining healthy SOC buffer
+
+### Negative Components
+
+* Grid usage penalty
+* Critical failure penalty (very large)
+* Deep discharge penalty
+* Excess switching penalty
+* Constraint violation penalty
+
+Reward must reflect long-term energy efficiency and resilience.
+
+---
+
+# 8️⃣ TRAINING SPECIFICATIONS
+
+* Algorithm: PPO or Double DQN
+* Environment: Custom Gym environment
+* Timestep: 1 minute
+* Episode: 360 steps
+* Total training: ≥ 250,000 steps
+* Use action masking
+* Use deterministic evaluation during testing
+
+---
+
+# 9️⃣ PERFORMANCE METRICS
+
+Evaluate using:
+
+* Renewable Usage Ratio (%)
+* Grid Energy Reduction (%)
+* Critical Reliability (failures count)
+* Deep Discharge Frequency
+* Outage Preparation Accuracy
+* Switching Frequency
+* Average Episode Reward
+
+---
+
+# 🔟 EXPECTED INTELLIGENT BEHAVIOR
+
+A well-trained agent should:
+
+* Use inverter during strong solar
+* Switch to grid during heavy load spikes
+* Preserve battery before long outages
+* Avoid draining battery unnecessarily
+* Avoid frequent switching
+* Maintain SOC safety buffer
+* Adapt decisions using forecasts
+
+---
+
+# 1️⃣1️⃣ TESTING FRAMEWORK
+
+Testing must include:
+
+### Manual Tests
+
+* Sunny day
+* Night low SOC
+* Grid outage
+* Pre-outage preparation
+* Heavy load spike
+* Cloudy low renewable
+
+### Full Episode Scenarios
+
+* Long outage (4h)
+* Frequent short outages
+* High load spikes
+* Cloudy day
+* Night outage
+
+---
+
+# 1️⃣2️⃣ FUTURE EXTENSIONS
+
+* Time-of-Use pricing optimization
+* Carbon emission minimization
+* Multi-hour predictive planning
+* LSTM-based load forecasting
+* Multi-agent energy trading
+* Real ESP32 hardware integration
+
+---
+
+# 🎯 FINAL SYSTEM GOAL
+
+Develop a resilient, predictive, renewable-optimized microgrid EMS that:
+
+* Maximizes renewable utilization
+* Minimizes grid dependence
+* Preserves battery health
+* Prepares for outages
+* Operates safely under physical constraints
+* Learns adaptive control policies via Reinforcement Learning
+
+---

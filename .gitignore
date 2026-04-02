@@ -1,0 +1,117 @@
+# ==========================================
+# Microgrid Project .gitignore
+# ==========================================
+
+# ----------------------------------------------------
+# Python & Virtual Environments
+# ----------------------------------------------------
+# Environments
+env/
+venv/
+.env/
+.venv/
+myenv/
+env.bak/
+venv.bak/
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# Testing
+.pytest_cache/
+coverage.xml
+htmlcov/
+
+# Packaging
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# ----------------------------------------------------
+# Machine Learning & AI
+# ----------------------------------------------------
+# Checkpoints & Logs
+checkpoints/
+logs/
+runs/
+*.log
+
+# Models
+*.pkl
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.ckpt
+*.pb
+*.onnx
+
+# Data (Datasets often shouldn't be tracked)
+*.csv
+
+# ----------------------------------------------------
+# Frontend / Node.js
+# ----------------------------------------------------
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build directories
+/frontend/dist
+/frontend/build
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ----------------------------------------------------
+# Editor / OS Specific
+# ----------------------------------------------------
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*.swo
+
+# MacOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ----------------------------------------------------
+# Miscellaneous & Specific Project Archives
+# ----------------------------------------------------
+*.zip
+*.tar
+*.tar.gz
+*.rar
+
+# Ignored from docs specifically requested by git status initially
+# (Untracked binaries that may optionally be ignored)
+# docs/*.docx
+# docs/*.png
+
