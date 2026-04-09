@@ -8,18 +8,18 @@
 
 LiquidCrystal_I2C lcd(0x27, 20, 4);
 
-/* ================= WIFI CONFIG ================= */
+// /* ================= WIFI CONFIG ================= */
 const char* ssid = "pradeep lap";
 const char* password = "9626119896";
 
-/* ================= SERVER CONFIG ================= */
+// /* ================= SERVER CONFIG ================= */
 const char* TELEMETRY_URL = "http://172.16.1.137:8000/api/telemetry";
 
-/* ================= TIMING ================= */
+// /* ================= TIMING ================= */
 unsigned long lastSendMillis = 0;
 const unsigned long SEND_INTERVAL = 1000;
 
-/* ================= WIFI RETRY ================= */
+// /* ================= WIFI RETRY ================= */
 unsigned long lastWiFiRetry = 0;
 const unsigned long WIFI_RETRY_INTERVAL = 5000;
 
@@ -95,6 +95,11 @@ int faultCount = 0;
 bool criticalOnInverter = false;
 bool nonCriticalOnInverter = false;
 bool usingInverter = false;
+bool inverterSwitchInProgress = false;
+unsigned long inverterSwitchStart = 0;
+
+bool pendingCritical = false;
+bool pendingNonCritical = false;
 
 int powersOfCritical[5];
 int powersOfNonCritical[5];
@@ -223,38 +228,58 @@ float calculateBatterySOC() {
   return batterySoc;
 }
 
+void handleInverterSwitch() {
+
+  if (!inverterSwitchInProgress) return;
+
+  if (millis() - inverterSwitchStart >= 3000) {
+
+    if (pendingCritical) {
+      digitalWrite(RELAY_CRITICAL_SOCKET, LOW);
+      criticalOnInverter = true;
+      digitalWrite(LED_G1_RED, LOW);
+      digitalWrite(LED_G1_GREEN, HIGH);
+    }
+
+    if (pendingNonCritical) {
+      digitalWrite(RELAY_NON_CRITICAL_SOCKET, LOW);
+      nonCriticalOnInverter = true;
+      digitalWrite(LED_G2_RED, LOW);
+      digitalWrite(LED_G2_GREEN, HIGH);
+    }
+
+    inverterSwitchInProgress = false;
+
+    Serial.println("Inverter switching complete");
+  }
+}
+
 // changing loads to inverter
 void changeToInverter(bool criticalLoad, bool nonCriticalLoad) {
+
+  // Prevent re-triggering while already switching
+  if (inverterSwitchInProgress) return;
+
+  inverterSwitchInProgress = true;
+  inverterSwitchStart = millis();
+
   usingInverter = true;
-  // digitalWrite(MOSFET_TRIGGER, HIGH);
-  // delay(100);
+
+  // store what needs to be switched
+  pendingCritical = criticalLoad;
+  pendingNonCritical = nonCriticalLoad;
+
+  // Step 1: Turn ON inverter relay
   digitalWrite(RELAY_INVERTER, LOW);
-  delay(3000);
 
-  if (criticalLoad) {
-    digitalWrite(RELAY_CRITICAL_SOCKET, LOW);
-    criticalOnInverter = true;
-    digitalWrite(LED_G1_RED, LOW);
-    digitalWrite(LED_G1_GREEN, HIGH);
-  }
-
-  if (nonCriticalLoad) {
-    digitalWrite(RELAY_NON_CRITICAL_SOCKET, LOW);
-    nonCriticalOnInverter = true;
-    digitalWrite(LED_G2_RED, LOW);
-    digitalWrite(LED_G2_GREEN, HIGH);
-  }
-
-
-  Serial.print("INVERTER MODE | Critical=");
-  Serial.print(criticalOnInverter ? "INV" : "GRID");
-  Serial.print(" | NonCritical=");
-  Serial.println(nonCriticalOnInverter ? "INV" : "GRID");
+  Serial.println("Starting inverter switch...");
 }
 
 
 // changing loads to main grid
 void changeToGrid(bool criticalToGrid, bool nonCriticalToGrid) {
+
+  if (inverterSwitchInProgress) return;
 
   if (criticalToGrid) {
     digitalWrite(RELAY_CRITICAL_SOCKET, HIGH);
@@ -398,6 +423,7 @@ void parseAndApplyCommand(String json) {
 
   StaticJsonDocument<256> doc;
   DeserializationError error = deserializeJson(doc, json);
+
   if (error) {
     Serial.println("JSON parse failed");
     return;
@@ -407,27 +433,34 @@ void parseAndApplyCommand(String json) {
     return;
   }
 
-  String data = doc["command"]["action"].as<String>();
+  JsonArray inverter = doc["command"]["inverter"];
 
-  int p1 = data.indexOf(',');
-  int p2 = data.indexOf(',', p1 + 1);
-  int p3 = data.indexOf(',', p2 + 1);
+  if (inverter.size() < 2) return;
 
-  float voltage = data.substring(0, p1).toInt();
-  float current = data.substring(p1 + 1, p2).toFloat();
-  float power = data.substring(p2 + 1, p3).toFloat();
-  int battery = data.substring(p3 + 1).toInt();
-  JsonArray sockets = doc["command"]["sockets"].as<JsonArray>();
+  int cr = inverter[0];  // critical
+  int nc = inverter[1];  // non-critical
 
   lcd.setCursor(0, 3);
   lcd.print("Cmd: ");
-  lcd.print(data);
+  lcd.print(cr);
+  lcd.print(",");
+  lcd.print(nc);
 
-  for (JsonVariant s : sockets) {
-    String socket = s.as<String>();
+  // Apply logic correctly
+  // CRITICAL
+  if (cr == 1 && !criticalOnInverter) {
+    changeToInverter(true, false);
+  } else if (cr == 0 && criticalOnInverter) {
+    changeToGrid(true, false);
+  }
+
+  // NON-CRITICAL
+  if (nc == 1 && !nonCriticalOnInverter) {
+    changeToInverter(false, true);
+  } else if (nc == 0 && nonCriticalOnInverter) {
+    changeToGrid(false, true);
   }
 }
-
 
 
 /* ================= SEND TELEMETRY ================= */
@@ -531,6 +564,7 @@ void setup() {
 void loop() {
 
   checkWiFi();
+  handleInverterSwitch();
 
   unsigned long start = millis();
 
@@ -564,12 +598,15 @@ void loop() {
       Serial.println("inverter fault detected");
     }
   }
-  // autoSwitchToInverter();
 
   // --- Keep exactly 1-second cycle ---
-  while (millis() - start < 1000) {
-    delay(1);  // prevent watchdog reset
-  }
+  // while (millis() - start < 1000) {
+  //   delay(1);  // prevent watchdog reset
+  // }
+
+  if (millis() - lastSendMillis >= 1000) {
+  lastSendMillis = millis();
+}
 
   // Serial
   Serial.println("===== SENSOR READINGS =====");
@@ -586,6 +623,8 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED) {
     sendTelemetry();
   }
+
+  else autoSwitchToInverter();
 
   if (Serial.available()) {
     char m = Serial.read();

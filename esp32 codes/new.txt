@@ -1,0 +1,88 @@
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+
+/* ================= WIFI CONFIG ================= */
+const char* ssid = "pradeep lap";
+const char* password = "9626119896";
+
+/* ================= SERVER CONFIG ================= */
+const char* TELEMETRY_URL = "http://172.16.1.137:8000/api/telemetry";
+
+/* ================= TIMING ================= */
+unsigned long lastSendMillis = 0;
+const unsigned long SEND_INTERVAL = 2000;
+
+/* ================= WIFI CONNECT ================= */
+void connectWiFi() {
+  WiFi.begin(ssid, password);
+
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("\nConnected!");
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+/* ================= FAKE TELEMETRY ================= */
+void sendFakeTelemetry() {
+
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  StaticJsonDocument<200> data;
+
+  // ---- YOUR FORMAT ----
+  data["solar_power_w"] = random(0, 200);
+  data["wind_power_w"] = random(0, 200);
+  data["battery_soc"] = random(40, 100) / 100.0; // 0.0 - 1.0
+
+  data["critical_load_w"] = random(50, 200);
+  data["noncritical_load_w"] = random(20, 150);
+
+  data["grid_available"] = random(0, 2); // 0 or 1
+
+  String payload;
+  serializeJson(data, payload);
+
+  HTTPClient http;
+  http.begin(TELEMETRY_URL);
+  http.addHeader("Content-Type", "application/json");
+
+  int httpCode = http.POST(payload);
+
+  Serial.println("---- TELEMETRY ----");
+  Serial.println(payload);
+
+  if (httpCode > 0) {
+    Serial.print("Response Code: ");
+    Serial.println(httpCode);
+
+    String response = http.getString();
+    Serial.println("Server Response:");
+    Serial.println(response);
+  } else {
+    Serial.print("HTTP Error: ");
+    Serial.println(httpCode);
+  }
+
+  http.end();
+}
+
+/* ================= SETUP ================= */
+void setup() {
+  Serial.begin(115200);
+  connectWiFi();
+}
+
+/* ================= LOOP ================= */
+void loop() {
+
+  if (millis() - lastSendMillis > SEND_INTERVAL) {
+    lastSendMillis = millis();
+    sendFakeTelemetry();
+  }
+}

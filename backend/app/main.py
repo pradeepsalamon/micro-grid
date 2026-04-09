@@ -1,67 +1,38 @@
-from fastapi import FastAPI, Request
-from typing import Optional, Dict
-from .models import PowerData
+from fastapi import FastAPI
+import uvicorn
+import requests
+import httpx
+import os
+from dotenv import load_dotenv
 
-app = FastAPI(
-    title="ESP API",
-    root_path="/esp"
-)
+app = FastAPI()
 
-# ================================
-# STORAGE FOR TELEMETRY + COMMANDS
-# ================================
-latest_telemetry: Dict = {}
-count = 0
+HOST = os.getenv("HOST", "localhost")
+PORT = int(os.getenv("PORT", 8000))
+ML_PORT = int(os.getenv("ML-PORT", 8001))
 
-
-# ================================
-# TELEMETRY MODEL
-# ================================
-
-
-# ================================
-# ESP32 SENDS DATA → SERVER
-# POST /api/telemetry
-# ================================
-@app.post("/api/telemetry")
-async def receive_telemetry(data: PowerData):
-    global latest_telemetry
-    global count
-    count += 1
-    latest_telemetry = data.dict()
-    print("\n📥 TELEMETRY RECEIVED:", latest_telemetry)
-
-    # Decide command BASED ON telemetry
-    command = None
-
-    if True:
-        command = {
-            "action": f"{count},3.0,500.0,30",
-            "sockets": ["non_critical"]
-        }
-
-    # If no command → respond normally
-    if command is None:
-        return {
-            "status": "ok",
-            "command": None
-        }
-
-    # If command exists → send it NOW
-    print("📤 COMMAND SENT:", command)
-    return {
-        "status": "ok",
-        "command": command
-    }
-
-
-
-
-# ================================
-# ROOT ENDPOINT
-# ================================
 @app.get("/")
-async def root():
-    return {"status": "FastAPI Microgrid Server Running"}
+def read_root():
+    return {"service": "middleware service is running"}
 
+@app.get("/predict")
+async def predict():
+    # Make a request to the solar prediction service
+    response = {}
+    async with httpx.AsyncClient() as client:
+        solar_prediction = await client.get(f"http://{HOST}:{ML_PORT}/solar-prediction")
+        if solar_prediction.status_code == 200:
+            response["solar_prediction"] = solar_prediction.json()
+        else:
+            return {"error": "Failed to get solar prediction"}
+    
+        wind_prediction = await client.get(f"http://{HOST}:{ML_PORT}/wind-prediction")
+        if wind_prediction.status_code == 200:
+            response["wind_prediction"] = wind_prediction.json()
+        else:
+            return {"error": "Failed to get wind prediction"}
+        
+        return response
 
+# if __name__ == "__main__":
+#     uvicorn.run(app, host="0.0.0.0", port=8000)
