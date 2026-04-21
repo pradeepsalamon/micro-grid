@@ -17,6 +17,7 @@ class Loads(BaseModel):
 
 
 class Info(BaseModel):
+    grid_available: bool
     critical_on_inverter: bool
     non_critical_on_inverter: bool
     using_inverter: bool

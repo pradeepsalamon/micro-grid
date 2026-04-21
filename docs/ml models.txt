@@ -1,0 +1,218 @@
+1. **Theft Detection Model** (theft.ipynb):  
+   - Purpose: Detects anomalies in electricity usage to identify potential theft.  
+   - Algorithm: IsolationForest (unsupervised anomaly detection).  
+   - Accuracy: 96.55%.
+
+2. **Solar Efficiency Prediction Model** (solar.ipynb):  
+   - Purpose: Predicts solar panel efficiency based on weather and historical data.  
+   - Algorithm: RandomForestRegressor.  
+   - Accuracy: 99.88%.
+
+3. **Wind Efficiency Prediction Model** (wind.ipynb):  
+   - Purpose: Predicts wind turbine efficiency based on wind speed, temperature, and historical data.  
+   - Algorithm: RandomForestRegressor.  
+   - Accuracy: 99.99%.
+
+4. **Load Prediction Model** (load.ipynb):  
+   - Purpose: Forecasts electricity load demand using time, weather, and historical factors.  
+   - Algorithm: RandomForestRegressor.  
+   - Accuracy: 97.74%.
+
+5. **Power Cut Prediction Model** (power_cut.ipynb):  
+   - Purpose: Predicts the likelihood of power cuts based on weather conditions.  
+   - Algorithm: RandomForestClassifier.  
+   - Accuracy: 94.52%.
+
+
+
+
+{
+  "solar_prediction": {
+    "efficiency": 95.42,
+    "power_output": 0.95
+  },
+  "wind_prediction": {
+    "efficiency": 0.08,
+    "power_output": 0,
+    "wind_speed": 0.45
+  },
+  "load_prediction": {
+    "scaled_load": 0.51,
+    "house_max_kw": 1
+  },
+  "power_cut_prediction": {
+    "prob_no_cut": 1,
+    "prob_cut": 0, -> make this single (0 or 1)
+  },
+  "theft_prediction": {
+    "prediction": 1,
+    "anomaly": false -> 0 else 1 like that ,
+  }
+}
+
+
+
+
+## **Theoretical Foundations: RL Agent Algorithms & Structures**
+
+---
+
+### **1. Algorithm: Proximal Policy Optimization (PPO)**
+
+**What it is:**
+PPO is a policy gradient reinforcement learning algorithm that trains an agent to maximize expected cumulative reward.
+
+**How it works in this project:**
+```
+Initialize: Neural network policy π(action | state)
+Loop:
+  1. Collect rollout: Run policy in environment → states, actions, rewards
+  2. Compute advantages: A(s,a) = Q(s,a) - V(s)
+  3. Clipped objective: Maximize min(ratio × A, clip(ratio, 1±ε) × A)
+     where ratio = π_new(a|s) / π_old(a|s)
+  4. Update: Gradient step on policy & value function
+  5. Repeat until convergence
+```
+
+**Why PPO here:**
+- ✅ **Stable**: Clipping prevents too-large policy updates
+- ✅ **Sample efficient**: Reuses rollout data via importance sampling
+- ✅ **Simple**: No separate critic training (on-policy)
+- ✅ **Production-ready**: Used by OpenAI, DeepMind
+
+---
+
+### **2. State Representation (10-D Observation)**
+
+**Normalized State Vector:**
+```python
+obs = [
+  solar_power_w / 500,        # Renewable generation [0, 1]
+  wind_power_w / 500,
+  battery_soc,                # State of charge [0, 1]
+  critical_load_w / 300,      # Demand [0, 1]
+  noncritical_load_w / 300,
+  grid_available,             # Binary [0, 1]
+  solar_forecast_w / 500,     # Future-aware [0, 1]
+  wind_forecast_w / 500,
+  load_forecast_w / 300,
+  power_cut_probability       # Risk signal [0, 1]
+]
+```
+
+**Why normalization?**
+- Neural networks learn better with inputs in `[0, 1]` or `[-1, 1]`
+- Prevents one feature from dominating gradients
+- Enables generalization across scenarios
+
+---
+
+### **3. Action Space (4 Discrete Actions)**
+
+**Factored Action Decomposition:**
+```
+Action = (critical_source, noncritical_source) where each ∈ {grid, inverter}
+```
+
+| Action | Critical | Non-Critical | Use Case |
+|--------|----------|--------------|----------|
+| 0      | Grid     | Grid         | High demand, no risk |
+| 1      | Grid     | Inverter     | Moderate renewable, low risk |
+| 2      | Inverter | Grid         | Renewable-heavy, protect critical |
+| 3      | Inverter | Inverter     | High generation, low demand |
+
+**Why factored?**
+- Reduces action space from exponential to linear
+- Reflects real-world independent decisions
+- Easier for policy to learn
+
+
+---
+
+### **5. Reward Function (Multi-Objective)**
+
+**Shaped Reward Signal:**
+```python
+R_total = (
+  +10 if critical_load_supplied,
+  -20 if critical_load_fails,
+  +3  if inverter_used (prefer renewable),
+  -3  if grid_used,
+  +2  if battery in [30%, 90%],
+  -10 if battery < 20%,
+  +5  if renewable_preference_matches_forecast,
+  -5  if inverter_overloaded,
+  -2  if frequent_action_switching
+)
+```
+
+**Why shaped reward?**
+- Raw "success/fail" too sparse for learning
+- Guidance signal accelerates convergence
+- Multi-objective captures domain knowledge
+
+---
+
+### **6. Data Flow & Control Structures**
+
+**Pipeline Architecture:**
+```
+┌─────────────────────────────────────────────────────────┐
+│ HTTP Request (JSON)                                     │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Pydantic Validation (Type Safety)                       │
+│  - Check ranges, types, constraints                     │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ State Normalization (Math Transform)                    │
+│  - Divide by max values → [0, 1]                        │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ PPO Policy Forward Pass (Neural Net)                    │
+│  - π(action | obs) = softmax(network(obs))             │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ Constraint Layer (Validation Logic)                     │
+│  - Apply safety rules, modify if needed                 │
+└────────────────────┬────────────────────────────────────┘
+                     ↓
+┌─────────────────────────────────────────────────────────┐
+│ HTTP Response (JSON)                                    │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+### **7. Key Theoretical Concepts**
+
+| Concept | Role | Formula |
+|---------|------|---------|
+| **Advantage** | Credit assignment | $A(s,a) = Q(s,a) - V(s)$ |
+| **Policy Loss** | Gradient direction | $L^{CLIP}(\theta) = \hat{\mathbb{E}}_t[\min(r_t(\theta)\hat{A}_t, \text{clip}(r_t(\theta), 1-\epsilon, 1+\epsilon)\hat{A}_t)]$ |
+| **Value Loss** | Baseline prediction | $L^V(\theta) = (\hat{V}_t - V_\theta(s_t))^2$ |
+| **Normalization** | Feature scaling | $x' = \frac{x - x_{min}}{x_{max} - x_{min}}$ |
+| **Entropy** | Exploration bonus | $S(\pi) = -\sum_a \pi(a\|s) \log \pi(a\|s)$ |
+
+---
+
+### **8. Why This Design Works**
+
+✅ **Factored actions** → Smaller search space  
+✅ **Normalized state** → Stable learning  
+✅ **Constraint layer** → No invalid decisions  
+✅ **Shaped reward** → Faster convergence  
+✅ **PPO** → Stable policy updates  
+✅ **Multi-objective** → Real-world alignment  
+
+This combines **classical control theory** (constraints, safety rules) with **modern deep RL** (PPO, function approximation).
+
+Similar code found with 1 license type
+
+
+
+

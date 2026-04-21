@@ -12,23 +12,120 @@ Edit the INPUT dict below, or run interactively.
 
 import json
 import numpy as np
+from pathlib import Path
 from stable_baselines3 import PPO
-from env import get_final_decision, ACTION_MAP, normalize_state
+from pydantic import BaseModel, Field, validator
+from app.env import get_final_decision, ACTION_MAP, normalize_state
 
-MODEL_PATH = "microgrid_model"
+MODEL_FILENAME = "microgrid_model.zip"
+MODEL_PATH = Path(__file__).resolve().parent.parent / "agent" / MODEL_FILENAME
+if not MODEL_PATH.exists():
+    MODEL_PATH = Path(__file__).resolve().parent / MODEL_FILENAME
+
+
+class PredictionRequest(BaseModel):
+    solar_power_w: float = Field(..., ge=0)
+    wind_power_w: float = Field(..., ge=0)
+    battery_soc: float = Field(..., ge=0.0, le=1.0)
+    critical_load_w: float = Field(..., ge=0)
+    noncritical_load_w: float = Field(..., ge=0)
+    grid_available: int = Field(...)
+    solar_forecast_w: float = Field(..., ge=0)
+    wind_forecast_w: float = Field(..., ge=0)
+    load_forecast_w: float = Field(..., ge=0)
+    power_cut_probability: float = Field(..., ge=0.0, le=1.0)
+
+    @validator("grid_available")
+    def validate_grid_available(cls, value):
+        if value not in (0, 1):
+            raise ValueError("grid_available must be 0 or 1")
+        return value
+
+
+class PredictionResponse(BaseModel):
+    action_id: int
+    critical_source: str
+    noncritical_source: str
+    inverter_total_w: float
+    overloaded: bool
+    constraint_applied: bool
+
+
+# ─── Model helpers ───────────────────────────────────────────────────────────
+
+def load_model(path: Path = MODEL_PATH) -> PPO:
+    """Load the trained PPO model from disk."""
+    if not path.exists():
+        raise FileNotFoundError(f"Model file not found: {path}")
+    return PPO.load(str(path))
+
+
+def predict_payload(payload: PredictionRequest, model: PPO) -> PredictionResponse:
+    """Predict from a validated request payload and return a response model."""
+    state = payload.dict()
+
+    # ── Print input state before decision ────────────────────────────────────
+    print("\n" + "─" * 56)
+    print("  📥  INCOMING REQUEST STATE (before decision):")
+    print(f"    Solar power       : {state['solar_power_w']:.1f} W")
+    print(f"    Wind power        : {state['wind_power_w']:.1f} W")
+    print(f"    Battery SOC       : {state['battery_soc']:.2f}")
+    print(f"    Critical load     : {state['critical_load_w']:.1f} W")
+    print(f"    Non-critical load : {state['noncritical_load_w']:.1f} W")
+    print(f"    Grid available    : {'Yes' if state['grid_available'] else 'No'}")
+    print(f"    Solar forecast    : {state['solar_forecast_w']:.1f} W")
+    print(f"    Wind forecast     : {state['wind_forecast_w']:.1f} W")
+    print(f"    Load forecast     : {state['load_forecast_w']:.1f} W")
+    print(f"    Cut probability   : {state['power_cut_probability']:.2f}")
+    print("─" * 56)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    obs = normalize_state(state).reshape(1, -1)
+    action, _ = model.predict(obs, deterministic=True)
+    decision = get_final_decision(int(action.item()), state)
+    response = PredictionResponse(
+        action_id=int(decision["action_id"]),
+        critical_source=str(decision["critical_source"]),
+        noncritical_source=str(decision["noncritical_source"]),
+        inverter_total_w=float(decision["inverter_total_w"]),
+        overloaded=bool(decision["overloaded"]),
+        constraint_applied=bool(decision["constraint_applied"]),
+    )
+
+    # ── Print response before sending ────────────────────────────────────────
+    print("  📤  OUTGOING RESPONSE (before send):")
+    print(f"    Action ID         : {response.action_id}")
+    print(f"    Critical source   : {response.critical_source}")
+    print(f"    Non-critical src  : {response.noncritical_source}")
+    print(f"    Inverter total    : {response.inverter_total_w:.1f} W")
+    print(f"    Overloaded        : {response.overloaded}")
+    print(f"    Constraint applied: {response.constraint_applied}")
+    print("─" * 56 + "\n")
+    # ─────────────────────────────────────────────────────────────────────────
+
+    return response
+
+
+def make_decision(state: dict, model: PPO) -> dict:
+    """Validate state, run the policy, and return the final constrained decision."""
+    errors = validate_input(state)
+    if errors:
+        raise ValueError(errors)
+    return predict(state, model)
+
 
 # ─── Edit this block with your desired state ──────────────────────────────────
 INPUT: dict = {
-    "solar_power_w": 15.0,
-    "wind_power_w": 110.0,
-    "battery_soc": 0.65,
-    "critical_load_w": 120.0,
-    "noncritical_load_w": 40.0,
+    "solar_power_w": 10.0,
+    "wind_power_w": 120.0,
+    "battery_soc": 0.7,
+    "critical_load_w": 100.0,
+    "noncritical_load_w": 50.0,
     "grid_available": 1,
-    "solar_forecast_w": 85.0,
-    "wind_forecast_w": 90.0,
-    "load_forecast_w": 100.0,
-    "power_cut_probability": 0.39,
+    "solar_forecast_w": 20.0,
+    "wind_forecast_w": 100.0,
+    "load_forecast_w": 160.0,
+    "power_cut_probability": 0.2,
 }
 
 

@@ -2,9 +2,10 @@ import fastapi
 import uvicorn
 import os
 from dotenv import load_dotenv
+from . utils import  predict_solar, predict_wind, predict_powercut, predict_load, detect_anomaly, get_weather_info
 
 load_dotenv()
-api_key = os.getenv("OPENWEATHER_API_KEY")
+
 
 app = fastapi.FastAPI()
 
@@ -14,14 +15,34 @@ def read_root():
 
 @app.get("/solar-prediction")
 def solar_predict():
-    
-    return {"prediction": 10}
+
+    return predict_solar()
 
 @app.get("/wind-prediction")
 def wind_predict():
     
-    return {"prediction": 70}
+    return predict_wind()
 
+@app.get("/powercut-prediction")
+def powercut_predict():
+    return predict_powercut()
+
+@app.get("/load-prediction")
+def load_predict():
+    return predict_load()
+
+@app.get("/theft-prediction")
+def theft_predict(voltage: float = 230, current: float = 0.0):
+    input_data = {
+        "voltage": voltage,
+        "current": current,
+    }
+    return detect_anomaly(input_data)
+
+@app.get("/weather-data")
+def get_weather():
+
+    return get_weather_info()
 
 # if __name__ == "__main__":
 #     uvicorn.run(app, host="0.0.0.0", port=8001, reload=True)

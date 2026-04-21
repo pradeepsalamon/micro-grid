@@ -33,10 +33,6 @@ def changeNc():
 @app.post("/api/telemetry")
 async def receive_telemetry(data: PowerData):
     global latest_telemetry
-    global count
-    global cr
-    global nc
-    count += 1
     latest_telemetry = data.dict()
     print("\n📥 TELEMETRY RECEIVED:", latest_telemetry)
 
@@ -45,7 +41,7 @@ async def receive_telemetry(data: PowerData):
 
     if True:
         command = {
-            "inverter": [1 if cr else 0, 1 if nc else 0]
+            "inverter": [1 , 0]
         }
 
     # If no command → respond normally

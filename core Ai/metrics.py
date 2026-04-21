@@ -19,7 +19,7 @@ Usage:
 import argparse
 import numpy as np
 from collections import defaultdict
-from stable_baselines3 import PPO
+from stable_baselines3 import PPO, DQN
 from env import MicrogridEnv, get_final_decision, SOC_MIN, INVERTER_MAX_W
 
 # ─── CLI ─────────────────────────────────────────────────────────────────────
@@ -240,12 +240,19 @@ def print_report(metrics: dict):
 
 def main():
     print("=" * 60)
-    print("  Microgrid PPO — Metrics Evaluation")
+    print("  Microgrid RL — Metrics Evaluation")
     print("=" * 60)
 
     try:
         model = PPO.load(args.model)
-        print(f"✅  Model loaded: '{args.model}.zip'")
+        print(f"✅  PPO Model loaded: '{args.model}.zip'")
+    except TypeError:
+        try:
+            model = DQN.load(args.model)
+            print(f"✅  DQN Model loaded: '{args.model}.zip'")
+        except Exception as e:
+            print(f"❌  Failed to load model: {e}")
+            return
     except FileNotFoundError:
         print(f"❌  '{args.model}.zip' not found. Run train.py first.")
         return

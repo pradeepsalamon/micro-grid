@@ -1,0 +1,378 @@
+import os
+import joblib
+import numpy as np
+import pandas as pd
+import requests
+from datetime import datetime
+
+# ─────────────────────────────────────────────
+# LOAD MODELS
+# ─────────────────────────────────────────────
+solar_model     = joblib.load("models/solar.pkl")
+wind_model      = joblib.load("models/wind.pkl")
+load_model      = joblib.load("models/load.pkl")
+power_cut_model = joblib.load("models/powercut.pkl")
+theft_model     = joblib.load("models/anomaly.pkl")
+
+# ─────────────────────────────────────────────
+# CSV PATHS (one per predictor)
+# ─────────────────────────────────────────────
+SOLAR_CSV = os.path.join("data", "solar.csv")
+WIND_CSV  = os.path.join("data", "wind.csv")
+LOAD_CSV  = os.path.join("data", "load.csv")
+
+# ─────────────────────────────────────────────
+# SHARED: Single weather fetch reused by all
+# ─────────────────────────────────────────────
+def fetch_weather(lat: float = 11.9224, lon: float = 79.6067) -> dict:
+    """
+    Fetch current weather once. Pass the returned dict to each predictor.
+    Raises RuntimeError / ValueError on failure.
+    """
+    api_key = os.getenv("OPENWEATHER_API_KEY")
+    if not api_key:
+        raise ValueError("OPENWEATHER_API_KEY environment variable is not set.")
+
+    try:
+        resp = requests.get(
+            "https://api.openweathermap.org/data/2.5/weather",
+            params={"lat": lat, "lon": lon, "appid": api_key},
+            timeout=10,
+        )
+        resp.raise_for_status()
+    except requests.exceptions.RequestException as exc:
+        raise RuntimeError(f"Weather API request failed: {exc}") from exc
+
+    data = resp.json()
+    if "main" not in data:
+        raise ValueError(f"Unexpected API response: {data.get('message', data)}")
+
+    return data
+
+
+# ─────────────────────────────────────────────
+# SHARED: Historical efficiency from any CSV
+# ─────────────────────────────────────────────
+def get_historical_efficiency(csv_path: str, current_date: int, current_hour: int) -> float:
+    """
+    Look up efficiency for (adjusted 2025 date, hour) in the given CSV.
+    Returns 0.0 when no match is found.
+    """
+    df = pd.read_csv(csv_path)
+
+    # Map current real-world date to dataset year 2025
+    date_str     = str(current_date)          # e.g. "20260414"
+    adjusted_date = int("2025" + date_str[4:]) # → "20250414"
+
+    row = df[(df["date"] == adjusted_date) & (df["hour"] == current_hour)]
+
+    print(f"[{os.path.basename(csv_path)}] Looking for date={adjusted_date}, hour={current_hour}")
+    print(row)
+
+    return float(row.iloc[0]["efficiency"]) if not row.empty else 0.0
+
+
+# ─────────────────────────────────────────────
+# SHARED: Solar irradiance scaling
+# ─────────────────────────────────────────────
+def _compute_irradiance(data: dict) -> float:
+    IRR_MIN, IRR_MAX = 0.9022, 7.3234
+
+    clouds      = data["clouds"]["all"]
+    current_dt  = datetime.fromtimestamp(data["dt"])
+    sunrise     = datetime.fromtimestamp(data["sys"]["sunrise"])
+    sunset      = datetime.fromtimestamp(data["sys"]["sunset"])
+
+    if current_dt < sunrise or current_dt > sunset:
+        return 0.0
+
+    daylight     = (sunset - sunrise).total_seconds()
+    elapsed      = (current_dt - sunrise).total_seconds()
+    solar_factor = np.sin(np.pi * elapsed / daylight)
+    cloud_factor = (100 - clouds) / 100
+
+    scaled = IRR_MIN + (solar_factor * cloud_factor) * (IRR_MAX - IRR_MIN)
+    return round(max(0.0, scaled), 4)
+
+
+# ─────────────────────────────────────────────
+# PREDICTOR: Solar
+# ─────────────────────────────────────────────
+def predict_solar(weather: dict) -> dict:
+    """
+    Predict solar panel efficiency and output.
+
+    Args:
+        weather: dict returned by fetch_weather()
+
+    Returns:
+        {"efficiency": float, "power_output": float}
+    """
+    PANEL_CAPACITY_KW = 1.0
+
+    temp_c     = weather["main"]["temp"] - 273.15
+    wind_speed = weather["wind"]["speed"]
+    dt         = datetime.fromtimestamp(weather["dt"])
+    hour, month = dt.hour, dt.month
+
+    irr          = _compute_irradiance(weather)
+    current_date = int(datetime.now().strftime("%Y%m%d"))
+    hist_eff     = get_historical_efficiency(SOLAR_CSV, current_date, hour)
+
+    print(f"☀️  Irradiance: {irr}  |  Historical Eff: {hist_eff}")
+
+    df = pd.DataFrame([{
+        "month":                month,
+        "hour":                 hour,
+        "temperature":          temp_c,
+        "wind_speed":           wind_speed,
+        "irradiance":           irr,
+        "historical_efficiency": hist_eff,
+    }])
+
+    efficiency   = float(np.clip(solar_model.predict(df)[0], 0, 100))
+    power_output = round((efficiency / 100) * PANEL_CAPACITY_KW, 2)
+
+    print(f"☀️  Solar → Efficiency: {round(efficiency, 2)}%  |  Output: {power_output} kW")
+    return {"efficiency": round(efficiency, 2), "power_output": power_output}
+
+
+# ─────────────────────────────────────────────
+# PREDICTOR: Wind
+# ─────────────────────────────────────────────
+def predict_wind(weather: dict) -> dict:
+    """
+    Predict wind turbine efficiency and output.
+    Wind cut-off: if wind_speed < 2 m/s, returns 0 (turbine doesn't operate).
+
+    Args:
+        weather: dict returned by fetch_weather()
+
+    Returns:
+        {"efficiency": float, "power_output": float, "wind_speed": float, "status": str}
+    """
+    TURBINE_CAPACITY_KW = 2.0
+    MIN_WIND_SPEED = 2.0
+
+    temp_c     = weather["main"]["temp"] - 273.15
+    wind_speed = weather["wind"]["speed"]
+    dt         = datetime.fromtimestamp(weather["dt"])
+    hour, month = dt.hour, dt.month
+
+    print(f"🌬️  Wind Speed: {wind_speed} m/s")
+
+    # Wind cut-off logic
+    if wind_speed < MIN_WIND_SPEED:
+        print(f"🌬️  Wind  → INSUFFICIENT (< {MIN_WIND_SPEED} m/s)  |  Output: 0 kW")
+        return {
+            "efficiency":   0.0,
+            "power_output": 0.0,
+            "wind_speed":   wind_speed,
+            "status":       "insufficient_wind"
+        }
+
+    current_date = int(datetime.now().strftime("%Y%m%d"))
+    hist_eff     = get_historical_efficiency(WIND_CSV, current_date, hour)
+
+    df = pd.DataFrame([{
+        "month":                month,
+        "hour":                 hour,
+        "temperature":          temp_c,
+        "wind_speed":           wind_speed,
+        "historical_efficiency": hist_eff,
+    }])
+
+    efficiency   = float(np.clip(wind_model.predict(df)[0], 0, 100))
+    power_output = round((efficiency / 100) * TURBINE_CAPACITY_KW, 2)
+
+    print(f"🌬️  Wind  → Efficiency: {round(efficiency, 2)}%  |  Output: {power_output} kW")
+    return {
+        "efficiency":   round(efficiency, 2),
+        "power_output": power_output,
+        "wind_speed":   wind_speed,
+        "status":       "operating"
+    }
+
+
+# ─────────────────────────────────────────────
+# PREDICTOR: Load
+# ─────────────────────────────────────────────
+def predict_load(weather: dict) -> dict:
+    """
+    Predict household load.
+
+    Args:
+        weather: dict returned by fetch_weather()
+
+    Returns:
+        {"raw_load": float, "scaled_load": float}
+    """
+    HOUSE_MAX_KW = 1.0
+
+    temp_c   = weather["main"]["temp"] - 273.15
+    humidity = weather["main"]["humidity"]
+    dt       = datetime.fromtimestamp(weather["dt"])
+    hour     = dt.hour
+    day      = dt.weekday()   # 0=Mon … 6=Sun
+    month    = dt.month
+
+    current_date = int(datetime.now().strftime("%Y%m%d"))
+    hist_load    = get_historical_efficiency(LOAD_CSV, current_date, hour)
+    # Note: load.csv is expected to have an "efficiency" column repurposed as
+    # "historical_load". Rename the column below if your CSV uses a different name.
+
+    # Derive dataset max from CSV for scaling
+    load_df      = pd.read_csv(LOAD_CSV)
+    dataset_max  = float(load_df["efficiency"].max()) if "efficiency" in load_df.columns else 1.0
+
+    df = pd.DataFrame([{
+        "hour":             hour,
+        "day":              day,
+        "month":            month,
+        "temperature":      temp_c,
+        "humidity":         humidity,
+        "historical_load":  hist_load,
+    }])
+
+    raw_load    = float(load_model.predict(df)[0])
+    scaled_load = round(float(np.clip((raw_load / dataset_max) * HOUSE_MAX_KW, 0, HOUSE_MAX_KW)), 2)
+
+    print(f"🔌  Load  → Raw: {round(raw_load, 2)} kW  |  Scaled: {scaled_load} kW")
+    return {"raw_load": round(raw_load, 2), "scaled_load": scaled_load}
+
+
+# ─────────────────────────────────────────────
+# PREDICTOR: Power Cut
+# ─────────────────────────────────────────────
+def predict_powercut(weather: dict) -> dict:
+    """
+    Predict probability of a power cut.
+
+    Args:
+        weather: dict returned by fetch_weather()
+
+    Returns:
+        {"probability": float, "status": str, "input_used": dict}
+    """
+    temp_c     = np.clip(weather["main"]["temp"] - 273.15, 21, 35)
+    humidity   = np.clip(weather["main"]["humidity"],      40, 100)
+    wind_speed = np.clip(weather["wind"]["speed"],          0,   6)
+    cloud      = np.clip(weather["clouds"]["all"],          0, 100)
+    rain       = np.clip(weather.get("rain", {}).get("1h", 0), 0, 60)
+    month      = datetime.fromtimestamp(weather["dt"]).month
+
+    input_data = {
+        "month":       month,
+        "temperature": float(temp_c),
+        "humidity":    float(humidity),
+        "wind_speed":  float(wind_speed),
+        "rainfall":    float(rain),
+        "cloud":       float(cloud),
+    }
+
+    df    = pd.DataFrame([input_data])
+    proba = power_cut_model.predict_proba(df)[0]
+    prob_cut = round(float(proba[1]), 3)
+
+    status = "⚠️ POWER CUT LIKELY" if prob_cut > 0.5 else "✅ NORMAL"
+    print(f"⚡  Power Cut Probability: {prob_cut}  →  {status}")
+    return {"probability": prob_cut, "status": status, "input_used": input_data}
+
+
+# ─────────────────────────────────────────────
+# PREDICTOR: Theft / Anomaly (no weather needed)
+# ─────────────────────────────────────────────
+def predict_theft(weather: dict, voltage: float = 230, current: float = 5) -> dict:
+    """
+    Detect anomalous (possibly theft) electricity usage.
+
+    Args:
+        weather: dict returned by fetch_weather()
+        voltage: Measured voltage (V) — default 230V
+        current: Measured current (A) — default 5A
+
+    Returns:
+        {"anomaly": bool, "status": str}
+    """
+    hour        = datetime.fromtimestamp(weather["dt"]).hour
+    consumption = (voltage * current) / 1000  # kW
+
+    df = pd.DataFrame([{
+        "hour":        hour,
+        "voltage":     voltage,
+        "current":     current,
+        "consumption": consumption,
+    }])
+
+    prediction = theft_model.predict(df)[0]
+    anomaly    = prediction == -1
+    status     = "🚨 ANOMALY DETECTED (Possible Theft!)" if anomaly else "✅ Normal Usage"
+
+    print(f"🔒  Theft Detection: {status}")
+    return {"anomaly": anomaly, "status": status}
+
+
+# ─────────────────────────────────────────────
+# UNIFIED PREDICTION: Single API call, all models
+# ─────────────────────────────────────────────
+def predict_all(voltage: float = 230, current: float = 5) -> dict:
+    """
+    Master prediction function:
+    - Fetches weather ONCE
+    - Runs all 5 models (solar, wind, load, powercut, theft)
+    - Returns unified response
+
+    Args:
+        voltage: Measured voltage (V) for theft detection
+        current: Measured current (A) for theft detection
+
+    Returns:
+        dict with all predictions
+    """
+    try:
+        print("\n" + "=" * 50)
+        print("🌐 Running predict_all()...")
+        print("=" * 50 + "\n")
+
+        # 1️⃣  ONE weather call
+        weather = fetch_weather()
+        ts = datetime.fromtimestamp(weather["dt"]).isoformat()
+
+        # 2️⃣  Run all 5 predictors
+        solar    = predict_solar(weather)
+        wind     = predict_wind(weather)
+        load     = predict_load(weather)
+        powercut = predict_powercut(weather)
+        theft    = predict_theft(weather, voltage=voltage, current=current)
+
+        # 3️⃣  Unified output
+        result = {
+            "timestamp": ts,
+            "predictions": {
+                "solar":    solar,
+                "wind":     wind,
+                "load":     load,
+                "powercut": powercut,
+                "theft":    theft,
+            }
+        }
+
+        print("\n" + "=" * 50)
+        print("📊  PREDICTION SUMMARY")
+        print("=" * 50)
+        print(f"☀️  Solar     : {solar['power_output']} kW  ({solar['efficiency']}%)")
+        print(f"🌬️  Wind      : {wind['power_output']} kW  ({wind['efficiency']}%)  [{wind.get('status', 'ok')}]")
+        print(f"🔌  Load      : {load['scaled_load']} kW")
+        print(f"⚡  Power Cut : {powercut['status']}  (p={powercut['probability']})")
+        print(f"🔍  Theft     : {theft['status']}")
+        print("=" * 50 + "\n")
+
+        return result
+
+    except Exception as e:
+        print(f"❌ Error in predict_all: {e}")
+        return {"error": str(e), "status": "failed"}
+
+
+if __name__ == "__main__":
+    predict_all()

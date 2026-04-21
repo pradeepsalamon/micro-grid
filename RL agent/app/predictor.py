@@ -13,22 +13,22 @@ Edit the INPUT dict below, or run interactively.
 import json
 import numpy as np
 from stable_baselines3 import PPO
-from env import get_final_decision, ACTION_MAP, normalize_state
+from app.env import get_final_decision, ACTION_MAP, normalize_state
 
 MODEL_PATH = "microgrid_model"
 
 # ─── Edit this block with your desired state ──────────────────────────────────
 INPUT: dict = {
-    "solar_power_w": 15.0,
-    "wind_power_w": 110.0,
-    "battery_soc": 0.65,
-    "critical_load_w": 120.0,
-    "noncritical_load_w": 40.0,
+    "solar_power_w": 10.0,
+    "wind_power_w": 120.0,
+    "battery_soc": 0.7,
+    "critical_load_w": 100.0,
+    "noncritical_load_w": 50.0,
     "grid_available": 1,
-    "solar_forecast_w": 85.0,
-    "wind_forecast_w": 90.0,
-    "load_forecast_w": 100.0,
-    "power_cut_probability": 0.39,
+    "solar_forecast_w": 20.0,
+    "wind_forecast_w": 100.0,
+    "load_forecast_w": 160.0,
+    "power_cut_probability": 0.2,
 }
 
 
