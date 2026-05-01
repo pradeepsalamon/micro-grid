@@ -26,3 +26,27 @@ spec:
             name: fastapi-esp-service
             port:
               number: 8000
+
+      - path: /api(/|$)(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: middleware-service
+            port:
+              number: 8000
+
+      - path: /ml(/|$)(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: ml-service
+            port:
+              number: 8000
+
+      - path: /core-ai(/|$)(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: core-ai-service
+            port:
+              number: 8000

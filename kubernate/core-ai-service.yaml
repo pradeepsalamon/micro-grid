@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: core-ai-service
+  namespace: microgrid
+spec:
+  type: ClusterIP                            # ✅ Internal only — called by middleware
+  selector:
+    app: core-ai-service
+  ports:
+    - port: 8000
+      targetPort: 8000

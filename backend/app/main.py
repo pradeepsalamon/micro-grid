@@ -1,8 +1,8 @@
 from fastapi import FastAPI, HTTPException
 import uvicorn
 import httpx
-from .models import PowerData, PredictionRequest, PredictionResponse
-from .utils import process_telemetry_and_get_command, fetch_predictions, get_weather, extract_observation, send_observation_to_core_ai_and_get_decision, HOST, RL_PORT
+from models import PowerData, PredictionRequest, PredictionResponse
+from utils import process_telemetry_and_get_command, fetch_predictions, get_weather, extract_observation, send_observation_to_core_ai_and_get_decision
 
 app = FastAPI()
 
@@ -48,16 +48,6 @@ def get_weather_data():
     """Fetch weather data from ML service."""
     return get_weather()
 
-@app.post("/decision")
-async def get_decision_endpoint():
-    """
-    Fetch ML forecasts → extract observation → get RL decision.
-    Returns the same PredictionResponse the ESP32 receives from /api/telemetry.
-    """
-    predictions = await fetch_predictions()
-    obs_data = extract_observation(predictions)
-    decision = await send_observation_to_core_ai_and_get_decision(obs_data)
-    return decision
 
 
 @app.post("/predict", response_model=PredictionResponse)

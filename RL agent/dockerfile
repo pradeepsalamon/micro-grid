@@ -1,0 +1,25 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies needed for torch/stable-baselines3
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy and install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the FastAPI app source
+COPY ./app /app
+
+# Copy the trained PPO model (loaded at startup by utils.py)
+COPY microgrid_model.zip /app/microgrid_model.zip
+
+# Ensure real-time logging (no buffering)
+ENV PYTHONUNBUFFERED=1
+
+# ✅ Start Core AI / RL Agent service on port 8002
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

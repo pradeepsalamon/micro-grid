@@ -2,7 +2,7 @@ import fastapi
 import uvicorn
 import os
 from dotenv import load_dotenv
-from . utils import  predict_solar, predict_wind, predict_powercut, predict_load, detect_anomaly, get_weather_info
+from utils import  predict_solar, predict_wind, predict_powercut, predict_load, detect_anomaly, get_weather_info
 
 load_dotenv()
 

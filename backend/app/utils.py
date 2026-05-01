@@ -9,10 +9,9 @@ from dotenv import load_dotenv
 # ================================
 load_dotenv()
 
-HOST = os.getenv("HOST")
-PORT = int(os.getenv("PORT", 8000))
-ML_PORT = int(os.getenv("ML-PORT", 8001))
-RL_PORT = int(os.getenv("RL-PORT", 8002))
+PORT    = int(os.getenv("PORT", 8000))
+ML_URL      = os.getenv("ML_URL",      "http://localhost:8001")
+CORE_AI_URL = os.getenv("CORE_AI_URL", "http://localhost:8002")
 
 # ================================
 # GLOBAL STATE
@@ -102,7 +101,7 @@ async def fetch_predictions() -> Dict:
     async with httpx.AsyncClient() as client:
         for endpoint, key in predictions:
             try:
-                result = await client.get(f"http://{HOST}:{ML_PORT}/{endpoint}")
+                result = await client.get(f"{ML_URL}/{endpoint}")
             except httpx.RequestError as exc:
                 response["errors"].append({
                     "service": key,
@@ -132,26 +131,12 @@ def get_weather() -> Dict:
         Weather data or error message
     """
     try:
-        result = requests.get(f"http://{HOST}:{ML_PORT}/weather-data")
+        result = requests.get(f"{ML_URL}/weather-data")
         result.raise_for_status()
         return result.json()
     except requests.RequestException as exc:
         return {"error": str(exc)}
 
-
-def get_decision() -> Dict:
-    """
-    Fetch decision from RL service.
-    
-    Returns:
-        Decision data or error message
-    """
-    try:
-        result = requests.get(f"http://{HOST}:{RL_PORT}/decision")
-        result.raise_for_status()
-        return result.json()
-    except requests.RequestException as exc:
-        return {"error": str(exc)}
 
 
 # ================================
@@ -252,7 +237,7 @@ async def send_observation_to_core_ai_and_get_decision(obs_data: Dict) -> Dict:
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             result = await client.post(
-                f"http://{HOST}:{RL_PORT}/predict",
+                f"{CORE_AI_URL}/predict",
                 json=prediction_request
             )
             result.raise_for_status()

@@ -13,7 +13,7 @@ Edit the INPUT dict below, or run interactively.
 import json
 import numpy as np
 from stable_baselines3 import PPO
-from app.env import get_final_decision, ACTION_MAP, normalize_state
+from env import get_final_decision, ACTION_MAP, normalize_state
 
 MODEL_PATH = "microgrid_model"
 

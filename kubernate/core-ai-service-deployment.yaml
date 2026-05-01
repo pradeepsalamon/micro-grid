@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: core-ai-deployment
+  namespace: microgrid
+  labels:
+    app: core-ai-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: core-ai-service
+  template:
+    metadata:
+      labels:
+        app: core-ai-service
+    spec:
+      containers:
+        - name: core-ai-container
+          image: core-ai-service:latest      # ✅ Locally built image (core Ai/)
+          imagePullPolicy: Never             # ✅ Important for Minikube local builds
+          ports:
+            - containerPort: 8000            # ✅ RL agent service port
+          env:
+            - name: PORT
+              value: "8000"

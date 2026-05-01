@@ -1,0 +1,48 @@
+version: "3.9"
+
+services:
+
+  # ── ML Prediction Service ───────────────────────────────────────────────────
+  ml-service:
+    build:
+      context: ./ml prediction models
+      dockerfile: dockerfile
+    image: ml-service:latest
+    container_name: ml-service
+    ports:
+      - "8001:8000"            # host:container — expose for local debugging only
+    environment:
+      PORT: 8000
+      OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY}
+    restart: unless-stopped
+
+  # ── Core AI / RL Agent Service ──────────────────────────────────────────────
+  core-ai-service:
+    build:
+      context: ./RL agent
+      dockerfile: dockerfile
+    image: core-ai-service:latest
+    container_name: core-ai-service
+    ports:
+      - "8002:8000"            # host:container — expose for local debugging only
+    environment:
+      PORT: 8000
+    restart: unless-stopped
+
+  # ── Middleware / Backend Service ─────────────────────────────────────────────
+  middleware-service:
+    build:
+      context: ./backend
+      dockerfile: dockerfile
+    image: middleware-service:latest
+    container_name: middleware-service
+    ports:
+      - "8000:8000"
+    environment:
+      PORT: 8000
+      ML_URL: http://ml-service:8000         # Docker DNS resolves service name
+      CORE_AI_URL: http://core-ai-service:8000
+    depends_on:
+      - ml-service
+      - core-ai-service
+    restart: unless-stopped

@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ml-deployment
+  namespace: microgrid
+  labels:
+    app: ml-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ml-service
+  template:
+    metadata:
+      labels:
+        app: ml-service
+    spec:
+      containers:
+        - name: ml-container
+          image: ml-service:latest           # ✅ Locally built image (ml prediction models/)
+          imagePullPolicy: Never             # ✅ Important for Minikube local builds
+          ports:
+            - containerPort: 8000            # ✅ ML service port
+          env:
+            - name: PORT
+              value: "8000"
+            - name: OPENWEATHER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: api-keys-secret
+                  key: OPENWEATHER_API_KEY

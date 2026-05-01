@@ -15,7 +15,7 @@ import numpy as np
 from pathlib import Path
 from stable_baselines3 import PPO
 from pydantic import BaseModel, Field, validator
-from app.env import get_final_decision, ACTION_MAP, normalize_state
+from env import get_final_decision, ACTION_MAP, normalize_state
 
 MODEL_FILENAME = "microgrid_model.zip"
 MODEL_PATH = Path(__file__).resolve().parent.parent / "agent" / MODEL_FILENAME

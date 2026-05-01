@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: middleware-deployment
+  namespace: microgrid
+  labels:
+    app: middleware-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: middleware-service
+  template:
+    metadata:
+      labels:
+        app: middleware-service
+    spec:
+      containers:
+        - name: middleware-container
+          image: middleware-service:latest    # ✅ Locally built image (backend/)
+          imagePullPolicy: Never              # ✅ Important for Minikube local builds
+          ports:
+            - containerPort: 8000             # ✅ FastAPI port
+          env:
+            - name: PORT
+              value: "8000"
+            - name: ML_URL
+              value: "http://ml-service:8000"
+            - name: CORE_AI_URL
+              value: "http://core-ai-service:8000"

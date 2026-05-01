@@ -6,9 +6,40 @@ fastAPI logs
 share external -> http://192.168.1.44:8000/
 kubectl port-forward --address 0.0.0.0 svc/fastapi-esp-service 8000:8000 -n microgrid
 
-ingress-services
+# ingress-services
 kubectl get ingress -n microgrid
 
-delete service
+# delete service
+kubectl delete deployment name -n microgrid
+kubectl delete service name -n microgrid
 kubectl delete ingress name -n microgrid
 
+
+
+# apply new updates
+# Run inside minikube's docker env
+eval $(minikube docker-env)
+
+docker build -t middleware-service:latest ./backend
+docker build -t ml-service:latest "./ml prediction models"
+docker build -t core-ai-service:latest "./rl agent"
+
+# delete services
+kubectl delete -f kubernate/middleware-service-deployment.yaml -n microgrid
+kubectl delete -f kubernate/middleware-service.yaml -n microgrid
+kubectl delete -f kubernate/ml-service-deployment.yaml -n microgrid
+kubectl delete -f kubernate/ml-service.yaml -n microgrid
+kubectl delete -f kubernate/core-ai-service-deployment.yaml -n microgrid
+kubectl delete -f kubernate/core-ai-service.yaml -n microgrid
+
+
+kubectl apply -f kubernate/middleware-service-deployment.yaml -n microgrid
+kubectl apply -f kubernate/middleware-service.yaml -n microgrid
+kubectl apply -f kubernate/ml-service-deployment.yaml -n microgrid
+kubectl apply -f kubernate/ml-service.yaml -n microgrid
+kubectl apply -f kubernate/core-ai-service-deployment.yaml -n microgrid
+kubectl apply -f kubernate/core-ai-service.yaml -n microgrid
+
+
+
+kubectl create secret generic api-keys-secret --from-literal=OPENWEATHER_API_KEY=<YOUR_OPENWEATHER_API_KEY> -n microgrid
