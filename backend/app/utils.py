@@ -59,7 +59,6 @@ async def process_telemetry_and_get_command(telemetry_data: Dict) -> Dict:
     
     # Step 2: Extract observation
     obs_data = extract_observation(predictions)
-    print("📊 Observation extracted:", obs_data["observation"])
     
     # Step 3: Send observation to Core AI and get decision
     print("🤖 Sending observation to Core AI...")
@@ -83,10 +82,14 @@ async def fetch_predictions() -> Dict:
     response = {"predictions": {}, "errors": []}
     
     # Build theft-prediction endpoint with grid load from latest telemetry
-    theft_endpoint = "theft-prediction?current=4"
-    if latest_telemetry and "loads" in latest_telemetry and "grid" in latest_telemetry["loads"]:
-        grid_load = latest_telemetry["loads"]["grid"]
-        theft_endpoint = f"theft-prediction?current={grid_load}"
+    theft_voltage = 230.0  # default nominal voltage
+    theft_current = 1.0    # default
+    if latest_telemetry and "loads" in latest_telemetry:
+        grid_load_w = latest_telemetry["loads"].get("grid", 0)
+        # Estimate current from power and nominal voltage (P = V * I)
+        if grid_load_w > 200:  # Only calculate if load is significant to avoid noise
+            theft_current = round(grid_load_w / theft_voltage, 4)
+    theft_endpoint = f"theft-prediction?voltage={theft_voltage}&current={theft_current}"
     
     predictions = [
         ("solar-prediction", "solar_prediction"),
@@ -166,37 +169,37 @@ def extract_observation(predictions: Dict) -> Dict:
         Dictionary with normalized observation array and metadata
     """
     pred = predictions.get("predictions", {})
-    
-    # Extract values with defaults
-    solar_power = pred.get("solar_prediction", {}).get("power_output", 0) / 500
-    wind_power = pred.get("wind_prediction", {}).get("power_output", 0) / 500
-    
-    # From telemetry
-    battery_soc = latest_telemetry.get("sources", {}).get("battery_soc", 0)
-    critical_load = latest_telemetry.get("loads", {}).get("critical", 0) / 300
-    noncritical_load = latest_telemetry.get("loads", {}).get("non_critical", 0) / 300
-    grid_available = int(latest_telemetry.get("info", {}).get("grid_available", False))
-    
-    # Forecasts from predictions
-    solar_forecast = pred.get("solar_prediction", {}).get("efficiency", 0) / 500
-    wind_forecast = pred.get("wind_prediction", {}).get("efficiency", 0) / 500
-    load_forecast = pred.get("load_prediction", {}).get("scaled_load", 0)  # Already normalized
-    
+
+    # ── Current measurements from telemetry (actual sensor readings in Watts) ──
+    solar_power_w      = latest_telemetry.get("sources", {}).get("solar_power", 0)
+    wind_power_w       = latest_telemetry.get("sources", {}).get("wind_power", 0)
+    battery_soc        = latest_telemetry.get("sources", {}).get("battery_soc", 0)
+    critical_load_w    = latest_telemetry.get("loads", {}).get("critical", 0)
+    noncritical_load_w = latest_telemetry.get("loads", {}).get("non_critical", 0)
+    grid_available     = int(latest_telemetry.get("info", {}).get("grid_available", False))
+
+    # ── Forecasts from ML models ──
+    # power_output is in kW (0–1 kW for 1kW panel/turbine) → convert to Watts (×1000)
+    solar_forecast_w = pred.get("solar_prediction", {}).get("power_output", 0) * 100
+    wind_forecast_w  = pred.get("wind_prediction",  {}).get("power_output", 0)
+    # scaled_load is a 0-1 fraction of house_max_kw (1 kW) → stored as fraction, sent as W later
+    load_forecast_frac = pred.get("load_prediction", {}).get("scaled_load", 0)
+
     # Power cut probability
     power_cut_prob = pred.get("power_cut_prediction", {}).get("prob_cut", 0)
-    
-    # Build observation array
+
+    # ── Normalize (matches normalize_state() in RL agent env.py) ──
     obs = [
-        solar_power,
-        wind_power,
-        battery_soc,
-        critical_load,
-        noncritical_load,
-        grid_available,
-        solar_forecast,
-        wind_forecast,
-        load_forecast,
-        power_cut_prob
+        solar_power_w      / 500,   # obs[0]: actual solar  W ÷ 500
+        wind_power_w       / 500,   # obs[1]: actual wind   W ÷ 500
+        battery_soc,                # obs[2]: SOC already in [0, 1]
+        critical_load_w    / 300,   # obs[3]
+        noncritical_load_w / 300,   # obs[4]
+        float(grid_available),      # obs[5]
+        solar_forecast_w   / 500,   # obs[6]: forecast W ÷ 500
+        wind_forecast_w    / 500,   # obs[7]: forecast W ÷ 500
+        load_forecast_frac,         # obs[8]: fraction (×1000 → W when sending to RL)
+        power_cut_prob              # obs[9]
     ]
     
     return {
@@ -212,28 +215,6 @@ def extract_observation(predictions: Dict) -> Dict:
     }
 
 
-async def send_observation_to_core_ai(predictions: Dict) -> Dict:
-    """
-    Extract observation and send to Core AI controller.
-    
-    Args:
-        predictions: Response from ML prediction service
-        
-    Returns:
-        Response from Core AI or error
-    """
-    obs_data = extract_observation(predictions)
-    
-    try:
-        result = await httpx.AsyncClient().post(
-            f"http://{HOST}:{RL_PORT}/observe",
-            json=obs_data
-        )
-        result.raise_for_status()
-        print("\n📤 OBSERVATION SENT TO CORE AI:", obs_data["observation"])
-        return result.json()
-    except (httpx.RequestError, Exception) as exc:
-        return {"error": str(exc), "observation": obs_data["observation"]}
 
 
 async def send_observation_to_core_ai_and_get_decision(obs_data: Dict) -> Dict:
@@ -264,7 +245,7 @@ async def send_observation_to_core_ai_and_get_decision(obs_data: Dict) -> Dict:
         "grid_available":       int(obs[5]),
         "solar_forecast_w":     round(obs[6] * 500, 4),
         "wind_forecast_w":      round(obs[7] * 500, 4),
-        "load_forecast_w":      round(obs[8] * 300, 4),
+        "load_forecast_w":      round(obs[8] * 1000, 4),   # scaled_load (0-1) × 1000W house max
         "power_cut_probability": max(0.0, min(1.0, obs[9])),
     }
 
@@ -278,11 +259,6 @@ async def send_observation_to_core_ai_and_get_decision(obs_data: Dict) -> Dict:
             response = result.json()   # PredictionResponse
             print("📤 OBSERVATION SENT TO CORE AI (/predict)")
 
-            # Convert PredictionResponse → command dict
-            inverter_on  = 1 if response.get("inverter_total_w", 0) > 0 else 0
-            critical_inv = 1 if response.get("critical_source") == "inverter" else 0
-            noncrit_inv  = 1 if response.get("noncritical_source") == "inverter" else 0
-
             return {
                 "status": "ok",
                 "action_id":          response.get("action_id"),
@@ -291,18 +267,13 @@ async def send_observation_to_core_ai_and_get_decision(obs_data: Dict) -> Dict:
                 "inverter_total_w":   response.get("inverter_total_w"),
                 "overloaded":         response.get("overloaded"),
                 "constraint_applied": response.get("constraint_applied"),
-                "observation":        obs,
-                "command": {
-                    "inverter": [inverter_on, critical_inv]
-                }
             }
 
     except (httpx.RequestError, Exception) as exc:
         error_response = {
             "status": "error",
             "error": str(exc),
-            "observation": obs,
-            "command": {"inverter": [1, 0]}  # Safe fallback
+            # "command": {"inverter": [1, 0]}  # Safe fallback
         }
         print("❌ Error communicating with Core AI:", str(exc))
         return error_response

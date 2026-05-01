@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 import uvicorn
 import httpx
 from .models import PowerData, PredictionRequest, PredictionResponse
-from .utils import process_telemetry_and_get_command, fetch_predictions, get_weather, get_decision, send_observation_to_core_ai, HOST, RL_PORT
+from .utils import process_telemetry_and_get_command, fetch_predictions, get_weather, extract_observation, send_observation_to_core_ai_and_get_decision, HOST, RL_PORT
 
 app = FastAPI()
 
@@ -14,33 +14,33 @@ def read_root():
 async def receive_telemetry(data: PowerData):
     """
     Receive telemetry data → Fetch forecasts → Send to Core AI → Return command.
-    
+
     Flow:
     1. Store telemetry from ESP32
     2. Fetch ML forecast models
     3. Extract normalized observation
     4. Send to Core AI for decision
-    5. Return decision/command to ESP32
+    5. Return command to ESP32
     """
     decision = await process_telemetry_and_get_command(data.dict())
-    
+
+
     return {
-        "status": "ok",
-        "command": decision.get("command", {"inverter": [1, 0]}),
-        "decision": decision
+        "status":             decision.get("status", "error"),
+        "action_id":          decision.get("action_id"),
+        "critical_source":    decision.get("critical_source"),
+        "noncritical_source": decision.get("noncritical_source"),
+        "inverter_total_w":   decision.get("inverter_total_w"),
+        "overloaded":         decision.get("overloaded"),
+        "constraint_applied": decision.get("constraint_applied"),
     }
 
 
 
-@app.get("/predict")
-async def predict():
-    """Fetch predictions from ML service and send observation to Core AI."""
+@app.get("/forecast")
+async def forecast():
+    """Fetch predictions from all ML models and return them."""
     predictions = await fetch_predictions()
-    
-    # Send observation to Core AI
-    if not predictions.get("errors"):
-        await send_observation_to_core_ai(predictions)
-    
     return predictions
 
 @app.get("/weather")
@@ -49,9 +49,15 @@ def get_weather_data():
     return get_weather()
 
 @app.post("/decision")
-def get_decision_endpoint():
-    """Fetch decision from RL service."""
-    return get_decision()
+async def get_decision_endpoint():
+    """
+    Fetch ML forecasts → extract observation → get RL decision.
+    Returns the same PredictionResponse the ESP32 receives from /api/telemetry.
+    """
+    predictions = await fetch_predictions()
+    obs_data = extract_observation(predictions)
+    decision = await send_observation_to_core_ai_and_get_decision(obs_data)
+    return decision
 
 
 @app.post("/predict", response_model=PredictionResponse)

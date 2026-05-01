@@ -21,7 +21,7 @@ theft_model = joblib.load("models/anomaly.pkl")
 # ============================
 LOCATION = {"lat": 11.9224, "lon": 79.6067}
 PANEL_CAPACITY_KW = 1.0
-TURBINE_CAPACITY_KW = 2.0
+TURBINE_CAPACITY_KW = 0.02
 
 IRR_MIN = 0.9022
 IRR_MAX = 7.3234
@@ -294,6 +294,15 @@ def predict_powercut(threshold=0.5):
         "rainfall": float(weather_data.get("rain", {}).get("1h", weather_data.get("rain", {}).get("3h", 0.0))),
         "cloud": weather_data["clouds"]["all"],
     }
+    
+    # input_data = {
+    #     "month": 6,
+    #     "temperature": 28,
+    #     "humidity": 92,
+    #     "wind_speed": 12,
+    #     "rainfall": 15,
+    #     "cloud": 90,
+    # }
 
     feature_order = [
         "month",
@@ -303,10 +312,12 @@ def predict_powercut(threshold=0.5):
         "rainfall",
         "cloud",
     ]
+    print(f"🔌 Power Cut Input: {input_data}")
     df = pd.DataFrame([input_data])[feature_order]
     proba = power_cut_model.predict_proba(df)[0]
     prob_cut_prob = float(proba[1])
     is_cut = int(prob_cut_prob > threshold)
+    print(f"⚡ Power Cut Probability: {proba} (Threshold: {threshold}) → {'CUT' if is_cut else 'NO CUT'}")
 
     return {
         "prob_no_cut": 1 - is_cut,
@@ -322,11 +333,12 @@ def detect_anomaly(live_input):
         "hour": hour,
         "voltage": live_input.get("voltage"),
         "current": live_input.get("current"),
-        "consumption": (live_input.get("voltage", 230.0) * live_input.get("current", 5.5)) / 1000,
+        "consumption": (live_input.get("voltage", 230.0) * live_input.get("current", 1.0)) / 1000,
     }
     df = pd.DataFrame([input_data])
     prediction = int(theft_model.predict(df)[0])
     anomaly = int(prediction == -1)
+    print(f"🔍 Anomaly Detection Input: {input_data} → Prediction: {'ANOMALY' if anomaly else 'NORMAL'}")
 
     return {
         "prediction": prediction,
@@ -359,6 +371,8 @@ def predict_load(house_max_kw=1.0, dataset_csv=LOAD_CSV_FILE):
 
     scaled_load = (raw_load / dataset_max_kw) * house_max_kw if dataset_max_kw > 0 else 0.0
     scaled_load = max(0.0, min(scaled_load, house_max_kw))
+    
+    print(f"📊 Predicted Load (scaled): {round(scaled_load, 2)} kW (House Max: {house_max_kw} kW)")
 
     return {
         "scaled_load": round(scaled_load, 2),

@@ -32,7 +32,7 @@ def load_predict():
     return predict_load()
 
 @app.get("/theft-prediction")
-def theft_predict(voltage: float = 230, current: float = 0.0):
+def theft_predict(voltage: float = 230, current: float = 1.0):
     input_data = {
         "voltage": voltage,
         "current": current,
