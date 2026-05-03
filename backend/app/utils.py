@@ -1,8 +1,13 @@
+import logging
 import os
-import requests
+from typing import Callable, Dict, Optional, Tuple
+
 import httpx
-from typing import Dict, Tuple
+import requests
 from dotenv import load_dotenv
+from models import PredictionRequest, PredictionResponse
+
+logger = logging.getLogger(__name__)
 
 # ================================
 # CONFIGURATION
@@ -34,37 +39,50 @@ def process_telemetry(telemetry_data: Dict) -> Dict:
     print("\n📥 TELEMETRY RECEIVED:", latest_telemetry)
 
 
-async def process_telemetry_and_get_command(telemetry_data: Dict) -> Dict:
+async def process_telemetry_and_get_command(
+    telemetry_data: Dict,
+    on_request_built: Optional[Callable[[PredictionRequest], None]] = None,
+    on_response_got:  Optional[Callable[[PredictionResponse], None]] = None,
+) -> Dict:
     """
-    Complete flow: Store telemetry → Fetch forecasts → Extract observation → 
+    Complete flow: Store telemetry → Fetch forecasts → Extract observation →
     Send to Core AI → Return decision/command.
-    
+
     Args:
-        telemetry_data: Raw telemetry data from ESP32
-        
+        telemetry_data:   Raw telemetry data from ESP32.
+        on_request_built: Optional callback fired just before the
+                          ``PredictionRequest`` is sent to Core AI.
+                          Receives the validated model instance.
+        on_response_got:  Optional callback fired after a successful
+                          ``PredictionResponse`` is received from Core AI.
+                          Receives the validated model instance.
+
     Returns:
-        Dictionary with command/decision from Core AI
+        Dictionary with command/decision from Core AI.
     """
     global latest_telemetry
     latest_telemetry = telemetry_data
-    print("\n📥 TELEMETRY RECEIVED:", latest_telemetry)
-    
+    logger.info("📥 TELEMETRY RECEIVED: %s", latest_telemetry)
+
     # Step 1: Fetch forecasts from ML models
-    print("🔄 Fetching forecasts from ML models...")
+    logger.info("🔄 Fetching forecasts from ML models…")
     predictions = await fetch_predictions()
-    
+
     if predictions.get("errors"):
-        print("⚠️ Errors fetching predictions:", predictions["errors"])
-    
+        logger.warning("⚠️ Errors fetching predictions: %s", predictions["errors"])
+
     # Step 2: Extract observation
     obs_data = extract_observation(predictions)
-    
+
     # Step 3: Send observation to Core AI and get decision
-    print("🤖 Sending observation to Core AI...")
-    decision = await send_observation_to_core_ai_and_get_decision(obs_data)
-    
-    print("✅ Decision received:", decision)
-    
+    logger.info("🤖 Sending observation to Core AI…")
+    decision = await send_observation_to_core_ai_and_get_decision(
+        obs_data,
+        on_request_built=on_request_built,
+        on_response_got=on_response_got,
+    )
+
+    logger.info("✅ Decision received: %s", decision)
     return decision
 
 
@@ -202,63 +220,109 @@ def extract_observation(predictions: Dict) -> Dict:
 
 
 
-async def send_observation_to_core_ai_and_get_decision(obs_data: Dict) -> Dict:
+def build_prediction_request_from_obs(obs: list) -> PredictionRequest:
+    """
+    De-normalise an observation vector and return a validated
+    ``PredictionRequest`` Pydantic model.
+
+    Observation index mapping
+    ─────────────────────────
+    obs[0]  solar_power   (normalised ÷ 500)
+    obs[1]  wind_power    (normalised ÷ 500)
+    obs[2]  battery_soc   (0–1, unchanged)
+    obs[3]  critical_load (normalised ÷ 300)
+    obs[4]  noncrit_load  (normalised ÷ 300)
+    obs[5]  grid_avail    (0 or 1)
+    obs[6]  solar_fcast   (normalised ÷ 500)
+    obs[7]  wind_fcast    (normalised ÷ 500)
+    obs[8]  load_fcast    (fraction × 1000 W house max)
+    obs[9]  power_cut_prob(0–1)
+
+    Args:
+        obs: 10-element normalised observation list.
+
+    Returns:
+        Validated ``PredictionRequest`` instance.
+    """
+    return PredictionRequest(
+        solar_power_w        = round(obs[0] * 500,  4),
+        wind_power_w         = round(obs[1] * 500,  4),
+        battery_soc          = max(0.0, min(1.0, obs[2])),
+        critical_load_w      = round(obs[3] * 300,  4),
+        noncritical_load_w   = round(obs[4] * 300,  4),
+        grid_available       = int(obs[5]),
+        solar_forecast_w     = round(obs[6] * 500,  4),
+        wind_forecast_w      = round(obs[7] * 500,  4),
+        load_forecast_w      = round(obs[8] * 1000, 4),
+        power_cut_probability= max(0.0, min(1.0, obs[9])),
+    )
+
+
+async def send_observation_to_core_ai_and_get_decision(
+    obs_data: Dict,
+    on_request_built: Optional[Callable[[PredictionRequest], None]] = None,
+    on_response_got:  Optional[Callable[[PredictionResponse], None]] = None,
+) -> Dict:
     """
     Send observation to Core AI controller (/predict) and get decision/command.
 
-    Builds a PredictionRequest from the observation array and maps the
-    PredictionResponse back to a command dict.
+    Builds a ``PredictionRequest`` from the observation array, optionally
+    fires ``on_request_built`` before the HTTP call and ``on_response_got``
+    after a successful response, then maps the ``PredictionResponse`` back
+    to a plain command dict.
 
     Args:
-        obs_data: Extracted observation data with observation array and metadata
+        obs_data:         Extracted observation data (observation list + metadata).
+        on_request_built: Optional hook called with the ``PredictionRequest``
+                          before it is dispatched (e.g. for InfluxDB write).
+        on_response_got:  Optional hook called with the ``PredictionResponse``
+                          after it is received (e.g. for InfluxDB write).
 
     Returns:
-        Decision/command from Core AI or error fallback
+        Decision/command dict from Core AI, or an error fallback dict.
     """
     obs = obs_data.get("observation", [0] * 10)
 
-    # Map obs array indices → PredictionRequest fields
-    # obs: [solar_power, wind_power, battery_soc, critical_load,
-    #        noncritical_load, grid_available, solar_forecast,
-    #        wind_forecast, load_forecast, power_cut_prob]
-    prediction_request = {
-        "solar_power_w":        round(obs[0] * 500, 4),   # denormalise
-        "wind_power_w":         round(obs[1] * 500, 4),
-        "battery_soc":          max(0.0, min(1.0, obs[2])),
-        "critical_load_w":      round(obs[3] * 300, 4),
-        "noncritical_load_w":   round(obs[4] * 300, 4),
-        "grid_available":       int(obs[5]),
-        "solar_forecast_w":     round(obs[6] * 500, 4),
-        "wind_forecast_w":      round(obs[7] * 500, 4),
-        "load_forecast_w":      round(obs[8] * 1000, 4),   # scaled_load (0-1) × 1000W house max
-        "power_cut_probability": max(0.0, min(1.0, obs[9])),
-    }
+    # Build and validate the typed PredictionRequest
+    prediction_request_model = build_prediction_request_from_obs(obs)
+
+    # ── Hook: persist the request before sending ──────────────────────────────
+    if on_request_built is not None:
+        try:
+            on_request_built(prediction_request_model)
+        except Exception as exc:
+            logger.error("on_request_built callback failed: %s", exc, exc_info=True)
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             result = await client.post(
                 f"{CORE_AI_URL}/predict",
-                json=prediction_request
+                json=prediction_request_model.model_dump(),
             )
             result.raise_for_status()
-            response = result.json()   # PredictionResponse
-            print("📤 OBSERVATION SENT TO CORE AI (/predict)")
+            response_data = result.json()
+            logger.info("📤 OBSERVATION SENT TO CORE AI (/predict)")
 
-            return {
-                "status": "ok",
-                "action_id":          response.get("action_id"),
-                "critical_source":    response.get("critical_source"),
-                "noncritical_source": response.get("noncritical_source"),
-                "inverter_total_w":   response.get("inverter_total_w"),
-                "overloaded":         response.get("overloaded"),
-                "constraint_applied": response.get("constraint_applied"),
-            }
+        # Validate the response into a typed model
+        response_model = PredictionResponse(**response_data)
 
-    except (httpx.RequestError, Exception) as exc:
-        error_response = {
-            "status": "error",
-            "error": str(exc),
-            # "command": {"inverter": [1, 0]}  # Safe fallback
+        # ── Hook: persist the response after receiving ────────────────────────
+        if on_response_got is not None:
+            try:
+                on_response_got(response_model)
+            except Exception as exc:
+                logger.error("on_response_got callback failed: %s", exc, exc_info=True)
+
+        return {
+            "status":             "ok",
+            "action_id":          response_model.action_id,
+            "critical_source":    response_model.critical_source,
+            "noncritical_source": response_model.noncritical_source,
+            "inverter_total_w":   response_model.inverter_total_w,
+            "overloaded":         response_model.overloaded,
+            "constraint_applied": response_model.constraint_applied,
         }
-        print("❌ Error communicating with Core AI:", str(exc))
-        return error_response
+
+    except Exception as exc:
+        logger.error("❌ Error communicating with Core AI: %s", exc, exc_info=True)
+        return {"status": "error", "error": str(exc)}

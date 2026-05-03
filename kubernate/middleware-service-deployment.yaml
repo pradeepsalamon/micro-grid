@@ -28,3 +28,13 @@ spec:
               value: "http://ml-service:8000"
             - name: CORE_AI_URL
               value: "http://core-ai-service:8000"
+            - name: INFLUX_URL
+              value: "http://influxdb-service:8086"
+            - name: INFLUX_TOKEN
+              value: "3hPb_BB4ExjeATXlastgsVUdcuA3MMAw991Es19JkH1vZI56G6Dth2AGd8AB1ITbIiDAxNU-BqBSGupc7Mtd1g=="
+            - name: INFLUX_ORG
+              value: "microgrid"
+            - name: INFLUX_BUCKET
+              value: "microgrid"
+            - name: TZ
+              value: "Asia/Kolkata"

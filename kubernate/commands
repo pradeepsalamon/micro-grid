@@ -18,7 +18,7 @@ kubectl delete ingress name -n microgrid
 
 # apply new updates
 # Run inside minikube's docker env
-eval $(minikube docker-env)
+@FOR /f "tokens=*" %i IN ('minikube docker-env --shell cmd') DO @%i
 
 docker build -t middleware-service:latest ./backend
 docker build -t ml-service:latest "./ml prediction models"
@@ -40,6 +40,32 @@ kubectl apply -f kubernate/ml-service.yaml -n microgrid
 kubectl apply -f kubernate/core-ai-service-deployment.yaml -n microgrid
 kubectl apply -f kubernate/core-ai-service.yaml -n microgrid
 
+# influx
+kubectl port-forward svc/influxdb-service 8086:8086 -n microgrid
+
+kubectl create secret generic api-keys-secret --from-literal=OPENWEATHER_API_KEY=<YOUR_OPENWEATHER_API_KEY> -n microgrid
 
 
-kubectl create secret generic api-keys-secret --from-literal=OPENWEATHER_API_KEY=<YOUR_OPENWEATHER_API_KEY> -n microgrid
+sample telemetry
+
+{
+  "sources": {
+    "solar_power": 60,
+    "wind_power": 30,
+    "battery_power": 0,
+    "battery_soc": 0.7
+  },
+  "loads": {
+    "critical": 400,
+    "non_critical": 100,
+    "grid": 500,
+    "inverter": 100,
+    "total": 0
+  },
+  "info": {
+    "grid_available": true,
+    "critical_on_inverter": false,
+    "non_critical_on_inverter": true,
+    "using_inverter": true
+  }
+}

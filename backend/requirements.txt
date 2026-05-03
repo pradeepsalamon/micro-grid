@@ -10,10 +10,12 @@ h11==0.16.0
 httpcore==1.0.9
 httpx==0.28.1
 idna==3.11
+influxdb-client==1.48.0
 pydantic==2.12.5
 pydantic_core==2.41.5
 python-dotenv==1.2.2
 requests==2.33.1
+reactivex==4.0.4
 starlette==0.50.0
 typing-inspection==0.4.2
 typing_extensions==4.15.0

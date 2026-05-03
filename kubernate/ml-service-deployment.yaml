@@ -29,3 +29,5 @@ spec:
                 secretKeyRef:
                   name: api-keys-secret
                   key: OPENWEATHER_API_KEY
+            - name: TZ
+              value: "Asia/Kolkata"

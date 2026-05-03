@@ -24,3 +24,5 @@ spec:
           env:
             - name: PORT
               value: "8000"
+            - name: TZ
+              value: "Asia/Kolkata"
