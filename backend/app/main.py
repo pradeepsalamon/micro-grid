@@ -30,16 +30,19 @@ from models import PowerData, PredictionRequest, PredictionResponse
 from utils import (
     process_telemetry_and_get_command,
     fetch_predictions,
-    get_weather,
-    extract_observation,
-    send_observation_to_core_ai_and_get_decision,
-    build_prediction_request_from_obs,   # new helper – see utils.py
+    get_weather
 )
 from services.influx_service import (
     write_power_data,
     write_prediction_request,
     write_prediction_response,
     close as influx_close,
+    query_energy_usage,
+    query_source_utilization,
+    query_ai_accuracy,
+    query_kpi_stats,
+    query_event_stats,
+    get_latest_decision,
 )
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -85,7 +88,7 @@ app = FastAPI(
 
 @app.get("/", tags=["health"])
 def read_root():
-    """Health-check — confirms the middleware service is running."""
+    """Health-check — confirms the middleware service is running..."""
     return {"service": "middleware service is running"}
 
 
@@ -216,3 +219,27 @@ async def predict(payload: PredictionRequest):
             status_code=503,
             detail=f"Core AI unreachable: {exc}",
         )
+
+@app.get("/api/analytics/energy-usage", tags=["analytics"])
+def get_energy_usage(range: str = "-24h"):
+    return query_energy_usage(range)
+
+@app.get("/api/analytics/source-utilization", tags=["analytics"])
+def get_source_utilization(range: str = "-24h"):
+    return query_source_utilization(range)
+
+@app.get("/api/analytics/ai-accuracy", tags=["analytics"])
+def get_ai_accuracy(range: str = "-24h"):
+    return query_ai_accuracy(range)
+
+@app.get("/api/analytics/kpi-stats", tags=["analytics"])
+def get_kpi_stats(range: str = "-24h"):
+    return query_kpi_stats(range)
+
+@app.get("/api/analytics/event-stats", tags=["analytics"])
+def get_event_stats(range: str = "-24h"):
+    return query_event_stats(range)
+
+@app.get("/api/decision/latest", tags=["ai"])
+def get_latest_ai_decision():
+    return get_latest_decision()

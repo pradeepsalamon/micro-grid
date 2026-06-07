@@ -28,16 +28,16 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/api/telemetry': {
-        target: 'http://localhost:8000',
+      '/api': {
+        target: 'http://localhost/api',
         changeOrigin: true
       },
       '/forecast': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost/api',
         changeOrigin: true
       },
       '/weather': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost/api',
         changeOrigin: true
       }
     }

@@ -2,8 +2,10 @@ shows pods
 kubectl get pods -n microgrid
 
 fastAPI logs
+kubectl logs -f deployment/middleware-deployment -n microgrid
 
 share external -> http://192.168.1.44:8000/
+C:\Users\prade>kubectl port-forward --address 0.0.0.0 svc/middleware-service 8000:8000 -n microgrid
 kubectl port-forward --address 0.0.0.0 svc/fastapi-esp-service 8000:8000 -n microgrid
 
 # ingress-services
